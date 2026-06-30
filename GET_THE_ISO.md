@@ -1,8 +1,14 @@
 # Download the Security Ops OS live ISO
 
-The live image is **~7 GiB**, which is larger than any git forge's single-file
-limit (GitHub caps release assets at 2 GB), so it is published as **4 split
-parts** attached to the **[v1.9.0 release](../../releases/tag/v1.9.0)**.
+The live image is **~7 GiB**, larger than any git forge's single-file limit, so
+it is published as **4 split parts** (<2 GB each). Because Codeberg and the
+self-hosted Forgejo cap attachment size, the binary parts live on the
+**GitHub release**:
+
+👉 **https://github.com/cristiancmoises/securityops-os/releases/tag/v1.9.0**
+
+(The full source, tag, and this guide are mirrored on GitHub, Codeberg, and
+git.securityops.co. Prefer not to download 7 GB? Build it reproducibly: `./build.sh`.)
 
 **Build:** `r7 · sway-only · fast`
 **Full ISO sha256:** `b9ff788c01182eff8fa709d691fc7c9973750b763a97491d61a087d142018532`
