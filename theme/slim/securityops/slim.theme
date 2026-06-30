@@ -1,0 +1,50 @@
+# SecurityOS — SLiM login theme
+# A dark, "fsociety"-style login matching the GRUB + desktop wallpaper.
+# The background (background.png) is the same sec.png used everywhere.
+
+# Full-screen background, stretched to the panel resolution.
+background_style          stretch
+background_color          #000000
+
+# No separate panel image — draw the input widgets straight on the wallpaper.
+input_panel_x             50%
+input_panel_y             62%
+
+# --- Username / password input fields -------------------------------------
+input_name_x              50%
+input_name_y             62%
+input_pass_x             50%
+input_pass_y             67%
+input_color              #00ff5f
+input_alternate_color    #00ff5f
+input_cursor_height      18
+input_font               Verdana:size=11
+input_maxlength_passwd   32
+
+# --- Welcome banner --------------------------------------------------------
+welcome_color            #00ff5f
+welcome_font             Verdana:size=20:bold
+welcome_x                50%
+welcome_y                30%
+welcome_msg              SecurityOS  ·  LIVE
+
+# --- Helper / session line -------------------------------------------------
+msg_color                #9aa0a6
+msg_font                 Verdana:size=10
+msg_x                    50%
+msg_y                    52%
+
+session_color            #00ff5f
+session_font             Verdana:size=10
+
+# Default user is prefilled by SLiM (default-user = securityops). Password is
+# "securityops".  F1 switches session, F11 takes a screenshot.
+username_msg             login: securityops   ·   password: securityops
+username_color           #ffffff
+username_font            Verdana:size=12:bold
+username_x               50%
+username_y               58%
+
+# Shutdown / reboot prompt colours.
+password_color           #9aa0a6
+password_font            Verdana:size=11

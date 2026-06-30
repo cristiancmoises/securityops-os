@@ -1,0 +1,18 @@
+# Build outputs (multi-GB ISOs — NEVER commit)
+/out/
+*.iso
+*.iso.sha256
+
+# Editor / scratch
+.aider*
+*~
+\#*\#
+.DS_Store
+
+# Secrets must never be committed
+*.token
+*_token
+id_*
+*.pem
+*.key
+!securityos/securityops.defconfig

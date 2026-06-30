@@ -1,0 +1,35 @@
+Security Ops OS
+Copyright (C) Cristian Cezar Moisés
+Contact: sac@securityops.co
+
+This repository (the Security Ops OS image definition: config.scm, the
+(securityos ...) modules, build scripts and documentation) is licensed under the
+GNU Affero General Public License, version 3 or later (AGPL-3.0-or-later).
+See the LICENSE file for the full text.
+
+-----------------------------------------------------------------------------
+Bundled / packaged components keep their own upstream licenses
+-----------------------------------------------------------------------------
+
+The image installs third-party free software (the GNU system, Linux, sway,
+nmap, Wireshark, etc.), each under its own license, and the maintainer's own
+"Security Ops" tools (from the securityops Guix channel):
+
+  Evelin .......... AGPL-3.0-or-later OR LicenseRef-Evelin-Commercial  (DUAL)
+  VaptVupt ........ AGPL-3.0-or-later
+  Turbo Recorder .. GPL-3.0
+  Torando ......... AGPL-3.0-only
+  BTP (planned) ... Apache-2.0 (implementation); spec CC-BY-4.0
+  mirim (planned) . AGPL-3.0-only OR Commercial                        (DUAL)
+
+DUAL-LICENSED COMPONENTS (Evelin, mirim): you may use, study, modify and
+redistribute them for free under the AGPL. For proprietary, closed-source, or
+network-service ("SaaS") use that you do not wish to release under the AGPL, a
+separate COMMERCIAL license is available — contact sac@securityops.co.
+
+Nonguix components (e.g. linux-firmware, google-chrome, the blob-enabled kernel
+base) are NOT part of the GNU project and carry their own (often non-free)
+terms; they are pulled from the nonguix channel for hardware support.
+
+"Security Ops", "Evelin", and "BTP" may be trademarks of Cristian Cezar Moisés;
+the AGPL grant does not include trademark rights.
