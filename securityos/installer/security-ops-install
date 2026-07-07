@@ -1,0 +1,372 @@
+#!/run/current-system/profile/bin/bash
+# ============================================================================
+# security-ops-install — the Security Ops OS guided installer
+# ============================================================================
+# A branded (black background / cyan text) ncurses (whiptail) guided installer
+# for the declarative GNU Guix "Security Ops OS".  It collects the machine's
+# choices, GENERATES a self-contained /mnt/etc/config.scm, partitions the disk
+# (optionally LUKS-encrypted), makes the chosen filesystem, and runs
+# `guix system init' to build the system onto the target.
+#
+# It intentionally does NOT touch any disk until you type the target device
+# name to confirm.  Guix's install model is declarative: what this installer
+# produces is a config.scm you keep and can `guix system reconfigure' forever.
+#
+#   Filesystems : ext4 · btrfs · xfs · zfs(experimental)
+#   Encryption  : LUKS2 full-disk (optional)
+#   Desktops    : Sway (Wayland) · i3 (X11) · KDE Plasma
+#   Kernel      : linux-securityos 7.1.2 (hardened, from (securityos kernel))
+#
+# © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later
+# ============================================================================
+set -Eeuo pipefail
+
+# --- branding: black bg, cyan text (newt/whiptail palette) ------------------
+export NEWT_COLORS='
+root=,black
+window=cyan,black
+shadow=black,black
+border=cyan,black
+title=white,black
+button=black,cyan
+compactbutton=cyan,black
+actbutton=black,cyan
+checkbox=cyan,black
+actcheckbox=black,cyan
+entry=cyan,black
+disentry=gray,black
+label=cyan,black
+listbox=cyan,black
+actlistbox=black,cyan
+sellistbox=black,cyan
+actsellistbox=black,cyan
+textbox=cyan,black
+acttextbox=black,cyan
+emptyscale=,cyan
+fullscale=,cyan
+helpline=cyan,black
+roottext=cyan,black
+'
+export PATH="/run/current-system/profile/bin:/run/current-system/profile/sbin:$PATH"
+SRC=/etc/securityos/src          # embedded (securityos …) modules, for guix -L
+TITLE="Security Ops OS · Installer"
+LOG=/tmp/security-ops-install.log
+exec 3>>"$LOG"
+log(){ echo "[$(date +%T)] $*" >&3; }
+
+BANNER=$(cat <<'EOF'
+   ____                       _ _            ___
+  / ___|  ___  ___ _   _ _ __(_) |_ _   _   / _ \ _ __  ___
+  \___ \ / _ \/ __| | | | '__| | __| | | | | | | | '_ \/ __|
+   ___) |  __/ (__| |_| | |  | | |_| |_| | | |_| | |_) \__ \
+  |____/ \___|\___|\__,_|_|  |_|\__|\__, |  \___/| .__/|___/
+                                    |___/        |_|
+            I N   C O D E   W E   T R U S T .
+EOF
+)
+
+WIPED=0                       # set to 1 the instant we start modifying the disk
+die(){ trap - ERR; whiptail --title "$TITLE — ERROR" --msgbox "$1\n\nSee $LOG" 16 76; exit 1; }
+on_err(){
+  trap - ERR
+  if [ "$WIPED" = 1 ]; then
+    umount -R /mnt 2>/dev/null || true
+    cryptsetup close cryptroot 2>/dev/null || true
+    die "Installer aborted on error (line $1). The target disk was PARTIALLY
+MODIFIED; /mnt was unmounted and any LUKS mapping closed. Re-run to start over."
+  else
+    die "Installer aborted on error (line $1). No disk was modified."
+  fi
+}
+trap 'on_err $LINENO' ERR
+
+need_root(){ [ "$(id -u)" -eq 0 ] || exec sudo -E "$0" "$@"; }
+need_root "$@"
+
+msg(){ whiptail --title "$TITLE" --msgbox "$1" "${2:-14}" "${3:-74}"; }
+yesno(){ whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-74}"; }
+input(){ whiptail --title "$TITLE" --inputbox "$1" 10 74 "${2:-}" 3>&1 1>&2 2>&3; }
+password(){ whiptail --title "$TITLE" --passwordbox "$1" 10 74 3>&1 1>&2 2>&3; }
+menu(){ local p="$1"; shift; whiptail --title "$TITLE" --menu "$p" 20 74 10 "$@" 3>&1 1>&2 2>&3; }
+
+# ---------------------------------------------------------------------------
+# 0. Welcome
+# ---------------------------------------------------------------------------
+whiptail --title "$TITLE" --msgbox "$BANNER\n\nWelcome to the Security Ops OS guided installer.\n\nThis will install a hardened, declarative GNU Guix system to a disk.\nNothing is written until you confirm the target device by name." 22 74
+
+# ---------------------------------------------------------------------------
+# 1. Keyboard / locale / timezone
+# ---------------------------------------------------------------------------
+KEYMAP=$(menu "Keyboard layout:" \
+  "us"   "US English" \
+  "br"   "Brazilian ABNT2" \
+  "uk"   "United Kingdom" \
+  "de"   "German" \
+  "fr"   "French" \
+  "es"   "Spanish") || exit 1
+[ "$KEYMAP" = "br" ] && XKBVARIANT="abnt2" || XKBVARIANT=""
+
+LOCALE=$(menu "System locale:" \
+  "en_US.UTF-8" "English (US)" \
+  "pt_BR.UTF-8" "Português (Brasil)" \
+  "en_GB.UTF-8" "English (UK)" \
+  "de_DE.UTF-8" "Deutsch" \
+  "fr_FR.UTF-8" "Français" \
+  "es_ES.UTF-8" "Español") || exit 1
+
+# timezone: region then city
+TZREGION=$(menu "Timezone region:" \
+  "America"   "America" \
+  "Europe"    "Europe" \
+  "Asia"      "Asia" \
+  "Africa"    "Africa" \
+  "Australia" "Australia" \
+  "UTC"       "UTC (no region)") || exit 1
+if [ "$TZREGION" = "UTC" ]; then
+  TIMEZONE="UTC"
+else
+  ZI=/run/current-system/profile/share/zoneinfo
+  # %P prints the path relative to the region dir, so nested zones like
+  # Argentina/Buenos_Aires and Indiana/Indianapolis are reachable too.
+  mapfile -t CITIES < <(find "$ZI/$TZREGION" -type f -printf '%P\n' 2>/dev/null | sort)
+  ARGS=(); for c in "${CITIES[@]}"; do ARGS+=("$c" ""); done
+  CITY=$(menu "Timezone ($TZREGION/…):" "${ARGS[@]}") || exit 1
+  TIMEZONE="$TZREGION/$CITY"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Hostname + accounts
+# ---------------------------------------------------------------------------
+while :; do
+  HOSTNAME=$(input "Hostname:" "securityops") || exit 1
+  [[ "$HOSTNAME" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,62}$ ]] && break
+  msg "Hostname must be 1-63 chars: letters, digits, hyphen (no leading hyphen)." 9
+done
+while :; do
+  USERNAME=$(input "Your username (lowercase):" "securityops") || exit 1
+  [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] && break
+  msg "Username must start with a lowercase letter or _, then only a-z 0-9 _ -." 9
+done
+FULLNAME=$(input "Full name (optional):" "$USERNAME") || exit 1
+while :; do
+  UPASS=$(password "Password for '$USERNAME':") || exit 1
+  UPASS2=$(password "Confirm password for '$USERNAME':") || exit 1
+  [ "$UPASS" = "$UPASS2" ] && [ -n "$UPASS" ] && break
+  msg "Passwords did not match (or were empty). Try again." 9
+done
+while :; do
+  RPASS=$(password "Password for the root account:") || exit 1
+  RPASS2=$(password "Confirm root password:") || exit 1
+  [ "$RPASS" = "$RPASS2" ] && [ -n "$RPASS" ] && break
+  msg "Passwords did not match (or were empty). Try again." 9
+done
+
+# ---------------------------------------------------------------------------
+# 3. Desktop / WM
+# ---------------------------------------------------------------------------
+DESKTOP=$(menu "Desktop / window manager:" \
+  "sway" "Sway — Wayland tiling (default, fastest)" \
+  "i3"   "i3 — X11 tiling (XLibre/Xorg)" \
+  "kde"  "KDE Plasma — full desktop") || exit 1
+
+# ---------------------------------------------------------------------------
+# 4. Disk, encryption, filesystem
+# ---------------------------------------------------------------------------
+# TYPE + SIZE are single tokens; MODEL (last) may contain spaces — so filter on
+# the fixed-position TYPE column and take everything after SIZE as the model.
+mapfile -t DISKS < <(lsblk -dn -o NAME,TYPE,SIZE,MODEL | \
+  awk '$2=="disk" && $1 !~ /^(zram|loop|sr|fd|md|dm-)/ {name=$1; size=$3; $1=$2=$3=""; sub(/^ +/,""); printf "%s\t%s  %s\n", name, size, $0}')
+[ "${#DISKS[@]}" -gt 0 ] || die "No disks detected."
+DARGS=(); for d in "${DISKS[@]}"; do DARGS+=("/dev/$(echo "$d"|cut -f1)" "$(echo "$d"|cut -f2-)"); done
+DISK=$(menu "Target disk (WILL BE ERASED):" "${DARGS[@]}") || exit 1
+[ -b "$DISK" ] || die "$DISK is not a block device."
+# Guard 1: refuse the disk backing the live root (derive its parent disk).
+LIVESRC=$(findmnt -no SOURCE / 2>/dev/null || true)
+LIVEDISK=$(lsblk -nro PKNAME "$LIVESRC" 2>/dev/null | head -1 || true)
+[ -n "$LIVEDISK" ] && [ "/dev/$LIVEDISK" = "$DISK" ] && \
+  die "$DISK is the disk you booted from. Refusing to wipe the live medium."
+# Guard 2: warn if the target currently has mounted partitions (in use / the
+# booted USB).  The typed confirmation below is still the primary safeguard.
+if lsblk -nro MOUNTPOINT "$DISK" 2>/dev/null | grep -q .; then
+  yesno "WARNING: $DISK has MOUNTED partitions — it may be in use or be the\nmedium you booted from. Wiping it will destroy that data.\n\nAre you absolutely sure you want to target $DISK?" 13 || \
+    die "Aborted for safety (target had mounted partitions)."
+fi
+
+if yesno "Encrypt the system with LUKS2 full-disk encryption?\n\n(Strongly recommended. You'll set a passphrase now.)"; then
+  ENCRYPT=yes
+  while :; do
+    LPASS=$(password "LUKS passphrase for $DISK:") || exit 1
+    LPASS2=$(password "Confirm LUKS passphrase:") || exit 1
+    [ "$LPASS" = "$LPASS2" ] && [ -n "$LPASS" ] && break
+    msg "Passphrases did not match (or were empty). Try again." 9
+  done
+else
+  ENCRYPT=no
+fi
+
+FS=$(menu "Root filesystem:" \
+  "ext4"  "ext4 — stable, universal (recommended)" \
+  "btrfs" "Btrfs — snapshots, compression" \
+  "xfs"   "XFS — high-throughput" \
+  "zfs"   "ZFS — experimental (out-of-tree module)") || exit 1
+if [ "$FS" = "zfs" ]; then
+  yesno "ZFS on Guix uses an out-of-tree module and is EXPERIMENTAL here.\nRoot-on-ZFS may need manual steps after first boot.\n\nContinue with ZFS anyway?" 12 || FS=ext4
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Summary + typed confirmation
+# ---------------------------------------------------------------------------
+SUMMARY="Please review — this will ERASE $DISK:
+
+  Disk        : $DISK
+  Encryption  : $([ "$ENCRYPT" = yes ] && echo 'LUKS2 (yes)' || echo 'none')
+  Filesystem  : $FS
+  Desktop     : $DESKTOP
+  Hostname    : $HOSTNAME
+  User        : $USERNAME
+  Locale      : $LOCALE
+  Timezone    : $TIMEZONE
+  Keyboard    : $KEYMAP $XKBVARIANT
+  Kernel      : linux-securityos 7.1.2 (hardened)"
+# Show the full review in a TALL msgbox (an inputbox would clip the last lines),
+# then ask for the typed confirmation in its own short box.
+whiptail --title "$TITLE — review" --scrolltext --msgbox "$SUMMARY" 20 76
+CONFIRM=$(input "This ERASES $DISK. To proceed, type the target device path EXACTLY:" "") || exit 1
+[ "$CONFIRM" = "$DISK" ] || die "Confirmation did not match ($CONFIRM ≠ $DISK). Aborted — nothing changed."
+
+# ===========================================================================
+# EXECUTION — from here on the disk is modified.
+# ===========================================================================
+# partition node naming (nvme/mmc use pN) — compute BEFORE we touch the disk.
+case "$DISK" in *nvme*|*mmcblk*) P1="${DISK}p1"; P2="${DISK}p2";; *) P1="${DISK}1"; P2="${DISK}2";; esac
+
+WIPED=1                        # the on_err trap now cleans up + tells the truth
+{
+# --- partition: GPT, 512M ESP + rest for root ------------------------------
+log "wiping + partitioning $DISK"
+wipefs -a "$DISK"
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart securityops-root 513MiB 100%
+partprobe "$DISK" || true
+
+# Wait for the kernel to create the partition device nodes (settle) instead of a
+# blind sleep — a hardcoded delay races mkfs on slow/loaded systems.
+udevadm settle 2>/dev/null || true
+for _ in $(seq 1 75); do { [ -b "$P1" ] && [ -b "$P2" ]; } && break; sleep 0.2; done
+{ [ -b "$P1" ] && [ -b "$P2" ]; } || die "Partition nodes $P1/$P2 never appeared."
+
+mkfs.fat -F32 -n EFI "$P1"
+
+# --- optional LUKS ---------------------------------------------------------
+if [ "$ENCRYPT" = yes ]; then
+  log "luksFormat $P2"
+  printf '%s' "$LPASS" | cryptsetup luksFormat --type luks2 --batch-mode --key-file=- "$P2"
+  printf '%s' "$LPASS" | cryptsetup open --key-file=- "$P2" cryptroot
+  ROOTDEV=/dev/mapper/cryptroot
+  LUKS_UUID=$(blkid -s UUID -o value "$P2" 2>/dev/null || true)
+  [ -n "$LUKS_UUID" ] || die "Could not read the LUKS container UUID from $P2."
+else
+  ROOTDEV="$P2"
+fi
+
+# --- make the chosen filesystem -------------------------------------------
+log "mkfs $FS on $ROOTDEV"
+case "$FS" in
+  ext4)  mkfs.ext4  -F -L securityops "$ROOTDEV";;
+  btrfs) mkfs.btrfs -f -L securityops "$ROOTDEV";;
+  xfs)   mkfs.xfs   -f -L securityops "$ROOTDEV";;
+  zfs)   zpool create -f -o ashift=12 -O mountpoint=none -O compression=zstd \
+             -O acltype=posixacl -O xattr=sa securityos "$ROOTDEV"
+         zfs create -o mountpoint=/ securityos/root;;
+esac
+
+# --- mount target ----------------------------------------------------------
+if [ "$FS" = zfs ]; then
+  zpool export securityos; zpool import -R /mnt securityos; zfs mount securityos/root
+else
+  mount "$ROOTDEV" /mnt
+fi
+mkdir -p /mnt/boot/efi /mnt/etc
+mount "$P1" /mnt/boot/efi
+
+# Read the UUIDs the generated config keys on, WITH validation + a settle retry —
+# an empty root UUID would otherwise fail `guix system init' AFTER the wipe.
+EFI_UUID=$(blkid -s UUID -o value "$P1" 2>/dev/null || true)
+[ -n "$EFI_UUID" ] || die "Could not read the ESP UUID from $P1."
+ROOT_UUID=""
+if [ "$ENCRYPT" != yes ] && [ "$FS" != zfs ]; then
+  for _ in $(seq 1 25); do
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOTDEV" 2>/dev/null || true)
+    [ -n "$ROOT_UUID" ] && break; sleep 0.2
+  done
+  [ -n "$ROOT_UUID" ] || die "Could not read the new root filesystem UUID from $ROOTDEV."
+fi
+} 2>&3
+
+# ---------------------------------------------------------------------------
+# 6. Generate /mnt/etc/config.scm from the choices
+# ---------------------------------------------------------------------------
+log "generating config.scm ($DESKTOP / $FS / encrypt=$ENCRYPT)"
+# passwords go through the environment (SO_UPASS/SO_RPASS), never argv — so they
+# are invisible to `ps' and a leading `-' is not mis-parsed.
+SO_UPASS="$UPASS" SO_RPASS="$RPASS" \
+"$(dirname "$0")/gen-config.sh" \
+  --out /mnt/etc/config.scm \
+  --host "$HOSTNAME" --user "$USERNAME" --fullname "$FULLNAME" \
+  --locale "$LOCALE" --tz "$TIMEZONE" --keymap "$KEYMAP" --xkbvariant "$XKBVARIANT" \
+  --desktop "$DESKTOP" --fs "$FS" --encrypt "$ENCRYPT" \
+  --root-uuid "$ROOT_UUID" --efi-uuid "$EFI_UUID" \
+  --luks-uuid "${LUKS_UUID:-}" 2>&3
+
+whiptail --title "$TITLE" --yesno \
+  "Config generated at /mnt/etc/config.scm.\n\nReady to build & install the system with:\n  guix system init -L $SRC /mnt/etc/config.scm /mnt\n\nThis downloads/builds the full system (can take a while).\nProceed?" 16 74 || { msg "Stopped before install. Partitions are prepared; you can inspect /mnt/etc/config.scm and finish manually."; exit 0; }
+
+# ---------------------------------------------------------------------------
+# 7. Install
+# ---------------------------------------------------------------------------
+# Redirect NEW store writes to the target disk.  Without this, `guix system
+# init' writes gigabytes into the live RAM overlay and OOMs mid-install — so a
+# cow-store failure is FATAL, not ignorable.
+log "herd start cow-store /mnt"
+clear
+echo "Preparing the copy-on-write store on $DISK …"
+if ! herd start cow-store /mnt >>"$LOG" 2>&1; then
+  die "Could not start cow-store. It is required so the install writes to the
+target disk instead of RAM. Nothing further was installed."
+fi
+
+# Build & install.  Show the real guix output on the console (no gauge — a gauge
+# would swallow guix's exit status and progress).  Capture the TRUE exit code
+# via PIPESTATUS, and treat set -e off for this block so we report it ourselves.
+log "guix system init"
+clear
+cat <<BANNER
+  ────────────────────────────────────────────────────────────────
+   Security Ops OS — installing to $DISK
+   $FS · $([ "$ENCRYPT" = yes ] && echo 'LUKS2 encrypted' || echo 'no encryption') · $DESKTOP desktop · kernel 7.1.2
+   This downloads/builds the full system; it can take a while.
+   Full log: $LOG
+  ────────────────────────────────────────────────────────────────
+BANNER
+set +e
+guix system init -L "$SRC" /mnt/etc/config.scm /mnt 2>&1 | tee -a "$LOG"
+rc=${PIPESTATUS[0]}
+set -e
+
+# grub.cfg is written at the very END of `guix system init' (bootloader install
+# is the last step), so its presence + rc==0 is a trustworthy success signal —
+# unlike /mnt/gnu/store, which appears early and would false-positive.
+if [ "$rc" -eq 0 ] && [ -e /mnt/boot/grub/grub.cfg ]; then
+  if whiptail --title "$TITLE" --yesno \
+      "Security Ops OS was installed to $DISK.\n\nRemove the installation medium and reboot now?" 12 74; then
+    sync
+    umount -R /mnt 2>/dev/null || true
+    [ "$ENCRYPT" = yes ] && cryptsetup close cryptroot 2>/dev/null || true
+    reboot
+  fi
+else
+  die "guix system init failed (exit $rc). The disk was partitioned but the
+system was NOT fully installed. Inspect $LOG before retrying."
+fi

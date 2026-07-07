@@ -8,9 +8,52 @@ greeting, `/etc/securityos/build-id`).
 
 © Cristian Cezar Moisés · AGPL-3.0-or-later · sac@securityops.co
 
-> **Current: `1.9.0` ("Security Ops" r7 · sway-only · blazing-fast)** — X11 stack
-> removed, fontconfig-prewarm kills the multi-minute first-login stall
-> (login → desktop in ~7 s).
+> **Current: `1.10.0` ("Security Ops" r8 · guided installer · kernel 7.1.2)** —
+> a branded on-ISO guided installer (`security-ops-install`) turns the live image
+> into an installed system in minutes; the Esquema rootless container runtime is
+> baked in; the custom kernel moves to Linux **7.1.2**.
+
+## [1.10.0] — 2026-07-04  ("Security Ops" r8 · guided installer · kernel 7.1.2)
+
+The live image is now **installable**. Everything the live ISO already gave you —
+the hardened kernel, the sway desktop, the security toolset — can now be written
+to a real disk (optionally LUKS-encrypted) by a branded, guided TUI. No manual
+`guix system init`, no hand-written `config.scm`.
+
+### Added
+- **`security-ops-install` — a guided, branded disk installer** shipped *in* the
+  live ISO (run `sudo security-ops-install`). A black-background / cyan-text
+  **whiptail** TUI with the Security Ops banner walks you through:
+  - **Filesystem**: ext4 · Btrfs · XFS · ZFS *(experimental)*.
+  - **Full-disk encryption**: optional **LUKS2** (`cryptsetup luksFormat`), your
+    passphrase, never stored.
+  - **Desktop**: **Sway** (Wayland, default) · **i3** (X11) · **KDE Plasma**.
+  - **Locale, timezone, keyboard, hostname**, and **user + root accounts**
+    (passwords are hashed with `openssl passwd -6`; plaintext never touches disk).
+  - It then **generates a self-contained declarative `/etc/config.scm`** for your
+    exact choices, **partitions** the disk (GPT: 512 MiB ESP + root), makes the
+    filesystem, and runs **`guix system init`**. The installed system stays
+    100 % declarative — keep the file and `sudo guix system reconfigure` forever.
+  - Safety first: it touches **no disk** until you **type the target device path**
+    to confirm; it refuses the disk you booted from and warns on mounted targets;
+    a `cow-store` overlay routes the install to the target disk (not RAM).
+- **Esquema — rootless, Guile-native container runtime** is now in the system
+  profile (`(securityos packages esquema)`). C sandbox primitives (user / mount /
+  PID / UTS / IPC / net / cgroup namespaces, `pivot_root`, full capability drop,
+  seccomp-BPF allowlist, `NO_NEW_PRIVS`) exposed to a Guile FFI + Scheme runtime.
+  Upstream: `git.securityops.co/cristiancmoises/esquema`.
+
+### Changed
+- **Custom kernel → Linux 7.1.2** (`linux-securityos`, vanilla kernel.org + the
+  same KSPP hardening + performance overlay; `uname -r` = `7.1.2-SecurityOps`).
+- The live config now carries a dormant **`cow-store`** service (auto-start off),
+  activated by the installer so `guix system init` writes to the target disk.
+
+### Notes
+- ZFS root is **experimental** (out-of-tree module); the installer flags it and
+  it may need manual steps after first boot. ext4 / Btrfs / XFS are fully wired.
+- Generated configs were validated by lowering (`guix system build`) for every
+  desktop × filesystem × LUKS combination.
 
 ## [1.9.0] — 2026-06-30  ("Security Ops" r7 · sway-only · blazing-fast)
 
