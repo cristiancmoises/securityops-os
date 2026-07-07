@@ -16,9 +16,11 @@ nmap, Wireshark, etc.), each under its own license, and the maintainer's own
 "Security Ops" tools (from the securityops Guix channel):
 
   Evelin .......... AGPL-3.0-or-later OR LicenseRef-Evelin-Commercial  (DUAL)
+  Esquema ......... AGPL-3.0-or-later
   VaptVupt ........ AGPL-3.0-or-later
   Turbo Recorder .. GPL-3.0
   Torando ......... AGPL-3.0-only
+  security-ops-installer .. AGPL-3.0-or-later
   BTP (planned) ... Apache-2.0 (implementation); spec CC-BY-4.0
   mirim (planned) . AGPL-3.0-only OR Commercial                        (DUAL)
 

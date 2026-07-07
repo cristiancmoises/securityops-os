@@ -63,17 +63,19 @@
  (securityos kernel)              ; linux-securityos
  (securityos sessions)            ; %greeter-command
  (securityos home)                ; %home-environment (Guix Home)
- (securityos packages evelin))    ; evelin — PQ transport (prebuilt static binaries)
+ (securityos packages evelin)     ; evelin — PQ transport (prebuilt static binaries)
+ (securityos packages esquema)    ; esquema — rootless, Guile-native container runtime
+ (securityos packages installer)) ; security-ops-install — guided disk installer
 
 (use-service-modules base desktop linux networking shepherd sysctl xorg)
 
 (use-package-modules
- admin antivirus base cmake commencement compression compton curl disk dns emacs
- engineering file file-systems firmware fonts fontutils freedesktop gl glib gnome gnupg
- gnuzilla golang-crypto hardware i2p image image-viewers imagemagick linux lsof
- lxde monitoring mtools music ncdu networking nss password-utils pciutils pdf
- photo pulseaudio python rsync rust-apps security-token shells shellutils ssh
- suckless terminals text-editors tls tmux tor version-control video vim vpn w3m
+ admin antivirus base cmake commencement compression compton cryptsetup curl disk
+ dns emacs engineering file file-systems firmware fonts fontutils freedesktop gl
+ glib gnome gnupg gnuzilla golang-crypto hardware i2p image image-viewers imagemagick
+ linux lsof lxde monitoring mtools music ncdu networking nss password-utils pciutils
+ pdf photo pulseaudio python rsync rust-apps security-token shells shellutils slang
+ ssh suckless terminals text-editors tls tmux tor version-control video vim vpn w3m
  web-browsers wget wm xdisorg xorg
  chromium tor-browsers)                     ; ungoogled-chromium, torbrowser
 
@@ -180,7 +182,15 @@
         ;; net basics
         curl wget openssh
         ;; Security Ops post-quantum transport (prebuilt static musl binaries)
-        evelin))
+        evelin
+        ;; Security Ops rootless container runtime (C + Guile FFI sandbox)
+        esquema))
+
+(define %installer-packages
+  ;; The guided disk installer + the CLI tools it drives.  parted / the mkfs.*
+  ;; family / util-linux already come in via %fs-packages; here we add the two
+  ;; still-missing pieces: whiptail (newt) for the TUI and cryptsetup for LUKS.
+  (list security-ops-installer newt cryptsetup))
 
 (define %sysutil-packages
   (list util-linux pciutils usbutils dmidecode hwinfo hdparm nvme-cli
@@ -209,6 +219,7 @@
 (define %live-packages
   (append %wayland-packages %terminal-packages
           %editor-packages %browser-packages %fs-packages %security-packages
+          %installer-packages
           %sysutil-packages %media-packages %font-packages %gl-packages
           ;; nss-certs (TLS root CAs) is already in %base-packages on the
           ;; pinned guix, so it is NOT re-listed (avoids a duplicate warning).
@@ -347,6 +358,9 @@ SafeLogging 1
 
    user: securityops   pass: securityops   (passwordless sudo)
 
+   Install to disk:  sudo security-ops-install
+       guided TUI · ext4/btrfs/xfs/zfs · LUKS2 · Sway/i3/KDE · Esquema
+
 ")))))
 
    ;; GNU Guix Home for the live user: desktop packages + dotfiles + keybinds
@@ -359,6 +373,15 @@ SafeLogging 1
 
    ;; greetd login (replaces SLiM, which cannot launch a Wayland session).
    (service greetd-service-type %greetd-config)
+
+   ;; Copy-on-write store for the guided installer.  Dormant at boot
+   ;; (auto-start? #f); `security-ops-install' runs `herd start cow-store /mnt'
+   ;; so that `guix system init' writes new store items to the TARGET DISK
+   ;; instead of the live RAM overlay (which would otherwise OOM mid-install).
+   ;; The type is private to (gnu system install); reach it with @@.  It takes a
+   ;; value (ignored by the service proc — the real target is passed at
+   ;; `herd start cow-store /mnt' time), so give it #f.
+   (service (@@ (gnu system install) cow-store-service-type) #f)
 
    %simple-firewall
    %tor-service

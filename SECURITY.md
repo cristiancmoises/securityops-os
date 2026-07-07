@@ -1,6 +1,6 @@
 # Security Policy & Hardening Reference — Security Ops OS
 
-*Custom Linux **7.1.1-SecurityOps** · GNU Guix System live ISO · sway-only Wayland*
+*Custom Linux **7.1.2-SecurityOps** · GNU Guix System live ISO · sway-only Wayland · guided installer*
 © Cristian Cezar Moisés · contact **sac@securityops.co**
 
 This document describes (1) **how to report a vulnerability**, and (2) the
@@ -32,7 +32,7 @@ lockdown / module-signature enforcement.
 
 ## Layer 1 — Kernel build hardening (KSPP `CONFIG_*` actually built into the ISO)
 
-The ISO kernel is `linux-securityos` (vanilla Linux 7.1.1 + the nonguix
+The ISO kernel is `linux-securityos` (vanilla Linux 7.1.2 + the nonguix
 broad-driver base config + an **additive** KSPP/perf overlay via
 `customize-linux`). Only mainline, additive options are used.
 
@@ -141,10 +141,43 @@ loopback **Torando Control** GUI. **Caveat:** this is an *opt-in SOCKS proxy*,
 
 ---
 
+## Layer 8 — Installer & runtime isolation
+
+**Guided installer (`security-ops-install`).** Turning the live image into an
+installed system is the one operation that *destroys* data, so the installer is
+built defensively:
+
+- **No disk is touched until you type the target device path** to confirm — exact
+  string match, no normalization bypass. This is the primary accidental-wipe
+  backstop.
+- It **refuses the disk you booted from** (parent-disk of `/`, derived via
+  `lsblk -no pkname`) and **warns on any target with mounted partitions**.
+- Passwords never hit disk as plaintext or a command line: they travel by
+  environment, are hashed with `openssl passwd -6` read from **stdin**, and only
+  the SHA-512 crypt hash is written into the generated `config.scm`.
+- Free-text fields (hostname/user/full name) are validated and **escaped** before
+  they enter the Scheme config, so a `"`/`\` can't corrupt or inject into it.
+- On any mid-operation failure the error trap **unmounts `/mnt`, closes the LUKS
+  mapping**, and tells you the disk was *partially* modified (no false "done").
+- Success is gated on the **real `guix system init` exit code AND the presence of
+  `/mnt/boot/grub/grub.cfg`** (written last) — never a false-positive signal.
+- **Optional LUKS2 full-disk encryption** (`cryptsetup luksFormat`, aes-xts) with
+  the matching initrd crypto modules, so an installed system unlocks at boot.
+
+**Esquema (rootless container runtime).** Ships in the profile for defense-in-
+depth process isolation without a daemon or root: unprivileged **user namespaces**
+plus mount/PID/UTS/IPC/net/cgroup namespaces, `pivot_root`, **full capability
+drop**, a **seccomp-BPF syscall allowlist**, and `NO_NEW_PRIVS`. The FFI only
+`dlopen`s `libesquema.so` from `$ESQUEMA_LIBDIR` (the immutable store path), never
+a writable working directory.
+
+---
+
 ## What this is **NOT** (honest limitations)
 
-- **No full-disk/LUKS encryption** — the root is a read-only iso9660 + volatile
-  RAM overlay; no disk/UUID/LUKS is referenced.
+- **The live medium itself is not encrypted** — its root is a read-only iso9660 +
+  volatile RAM overlay, so no disk/UUID/LUKS is referenced on the ISO. (Full-disk
+  **LUKS2 is available when you _install_ to a real disk** — see Layer 8.)
 - **No kernel lockdown / no module-signature enforcement** — *on purpose*, so
   pentest tooling and out-of-tree drivers load freely.
 - **No Secure Boot** — GRUB boots an unsigned kernel; no measured boot.

@@ -5,7 +5,7 @@
 ### *In Code We Trust.*
 
 **A hardened, privacy-focused, reproducible GNU Guix System — as a boot-anywhere live ISO.**
-*Custom Linux 7.1.1-SecurityOps · sway (Wayland) · curated offensive & forensics toolkit · Tor on tap.*
+*Custom Linux 7.1.2-SecurityOps · sway (Wayland) · guided disk installer · curated offensive & forensics toolkit · Tor on tap.*
 
 `build r7 · sway-only · fast` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
 
@@ -111,6 +111,35 @@ straight in **sway**. `cat /etc/securityos/build-id` confirms which build you bo
 > **Default sway keys:** `Super+Return` terminal · `Super+d` launcher · `Super+q`
 > close · `Super+1..9` workspaces · `Super+Shift+e` exit · volume/brightness media keys.
 
+### 4. Install it to disk (optional — guided)
+
+Like what you booted? Put it on a real disk with the built-in guided installer:
+
+```sh
+sudo security-ops-install
+```
+
+A branded black-on-cyan TUI walks you through everything and then does the work
+for you — **no manual `guix system init`, no hand-written config**:
+
+| Choice | Options |
+|---|---|
+| **Filesystem** | ext4 · Btrfs · XFS · ZFS *(experimental)* |
+| **Encryption** | optional **LUKS2** full-disk (your passphrase, never stored) |
+| **Desktop** | **Sway** (Wayland) · **i3** (X11) · **KDE Plasma** |
+| **Locale / timezone / keyboard / hostname** | picked from menus |
+| **Accounts** | your user + root (passwords hashed with `openssl passwd -6`) |
+
+It **generates a self-contained declarative `/etc/config.scm`** for your exact
+choices, partitions the disk, makes the filesystem and runs `guix system init`.
+Your installed system stays 100 % declarative — keep the file and
+`sudo guix system reconfigure /etc/config.scm` forever.
+
+> **Safety:** nothing is written until you **type the target device path** to
+> confirm. The installer refuses the disk you booted from, warns on targets with
+> mounted partitions, and routes the install through a `cow-store` overlay so the
+> build lands on the target disk (not RAM).
+
 ---
 
 ## Security & hardening
@@ -143,6 +172,7 @@ media, and dev — plus a full sway desktop. **Complete table → [docs/PACKAGES
 | Tool | What it is | License |
 |---|---|---|
 | **Evelin** | Post-quantum secure tunnel (SSH-shaped): ML-KEM-1024 + ML-DSA-87 + ChaCha20-Poly1305 | **AGPL-3.0 _or_ Commercial (dual)** |
+| **Esquema** | Rootless, Guile-native container runtime — user/mount/PID/net/cgroup namespaces, `pivot_root`, cap-drop, seccomp-BPF allowlist, `NO_NEW_PRIVS` | AGPL-3.0-or-later |
 | **VaptVupt** | Post-quantum backup & compression (ML-KEM-768 + X25519, Argon2id, AES-256) — CLI + Qt GUI | AGPL-3.0-or-later |
 | **Turbo Recorder** | Auto-configuring HW-accelerated screen+audio recorder (NVENC/QSV/VAAPI/AMF) | GPL-3.0 |
 | **Torando** | Transparent Tor proxy + leak killswitch for one user, with a live-status GUI | AGPL-3.0-only |

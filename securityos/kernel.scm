@@ -30,12 +30,12 @@
   #:use-module (nongnu packages linux)     ; linux (blob kernel — broad config)
   #:export (linux-securityos))
 
-(define %linux-7.1.1-source
+(define %linux-7.1.2-source
   (origin
     (method url-fetch)
-    (uri "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.1.tar.xz")
+    (uri "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.2.tar.xz")
     (sha256
-     (base32 "0z8x6wafxzc5vkim9jh8wpycdkk9y5bpxgsirmdpyznw84szl5aj"))))
+     (base32 "0gw8nnq6nix9xk2dhb1jwmhnqjayrn3bn2akzg4lgqkvfa9qq69p"))))
 
 ;; Performance + hardening overlay (Clear-Linux / XanMod flavour, KSPP).  Only
 ;; additive (=y/=m), mainline, dependency-light options — NO choice groups
@@ -65,9 +65,9 @@
      (customize-linux
       #:name "securityops"
       #:linux linux
-      #:source %linux-7.1.1-source
+      #:source %linux-7.1.2-source
       #:extra-version "SecurityOps"
       #:configs %securityops-kernel-configs))
-    (version "7.1.1")
-    (synopsis "SecurityOps — hardened, performant Linux 7.1.1 (kernel.org + blobs)")
+    (version "7.1.2")
+    (synopsis "SecurityOps — hardened, performant Linux 7.1.2 (kernel.org + blobs)")
     (home-page "https://www.kernel.org/")))
