@@ -5,7 +5,7 @@ it is published as **4 split parts** (<2 GB each). Because Codeberg and the
 self-hosted Forgejo cap attachment size, the binary parts live on the
 **GitHub release**:
 
-👉 **https://github.com/cristiancmoises/securityos-os/releases/tag/v1.10.1**
+👉 **https://github.com/cristiancmoises/securityops-os/releases/tag/v1.10.1**
 
 (The full source, tag, and this guide are mirrored on GitHub, Codeberg, and
 git.securityops.co. Prefer not to download 7 GB? Build it reproducibly: `./build.sh`.)
