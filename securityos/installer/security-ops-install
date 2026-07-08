@@ -94,6 +94,12 @@ menu(){ local p="$1"; shift; whiptail --title "$TITLE" --menu "$p" 20 74 10 "$@"
 # ---------------------------------------------------------------------------
 whiptail --title "$TITLE" --msgbox "$BANNER\n\nWelcome to the Security Ops OS guided installer.\n\nThis will install a hardened, declarative GNU Guix system to a disk.\nNothing is written until you confirm the target device by name." 22 74
 
+# The generated config uses grub-efi + a vfat ESP, so it only boots on UEFI.
+# Refuse legacy-BIOS boots up front rather than producing an unbootable install.
+[ -d /sys/firmware/efi ] || die "This machine appears to have booted in legacy
+BIOS mode. The Security Ops installer currently supports UEFI systems only —
+reboot in UEFI mode and try again."
+
 # ---------------------------------------------------------------------------
 # 1. Keyboard / locale / timezone
 # ---------------------------------------------------------------------------
@@ -144,8 +150,16 @@ while :; do
 done
 while :; do
   USERNAME=$(input "Your username (lowercase):" "securityops") || exit 1
-  [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]] && break
-  msg "Username must start with a lowercase letter or _, then only a-z 0-9 _ -." 9
+  if [[ ! "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    msg "Username must start with a lowercase letter or _, then only a-z 0-9 _ - (max 32)." 9; continue
+  fi
+  # reserved system accounts would collide with the base accounts (and the
+  # generated config already defines its own root) → the install would abort
+  # AFTER the disk is wiped.  Refuse them here.
+  case " root nobody daemon bin sys sync mail messagebus sshd guixbuilder nscd " in
+    *" $USERNAME "*) msg "'$USERNAME' is a reserved system account name. Choose another." 9; continue;;
+  esac
+  break
 done
 FULLNAME=$(input "Full name (optional):" "$USERNAME") || exit 1
 while :; do
@@ -204,14 +218,21 @@ else
   ENCRYPT=no
 fi
 
-FS=$(menu "Root filesystem:" \
-  "ext4"  "ext4 — stable, universal (recommended)" \
-  "btrfs" "Btrfs — snapshots, compression" \
-  "xfs"   "XFS — high-throughput" \
-  "zfs"   "ZFS — experimental (out-of-tree module)") || exit 1
-if [ "$FS" = "zfs" ]; then
-  yesno "ZFS on Guix uses an out-of-tree module and is EXPERIMENTAL here.\nRoot-on-ZFS may need manual steps after first boot.\n\nContinue with ZFS anyway?" 12 || FS=ext4
-fi
+while :; do
+  FS=$(menu "Root filesystem:" \
+    "ext4"  "ext4 — stable, universal (recommended)" \
+    "btrfs" "Btrfs — snapshots, compression" \
+    "xfs"   "XFS — high-throughput" \
+    "zfs"   "ZFS — planned (not selectable yet)") || exit 1
+  # Root-on-ZFS needs an out-of-tree module the Security Ops kernel does not
+  # carry (and a pool-import service).  Rather than wipe the disk and fail at
+  # `guix system init', refuse ZFS up front and let the user pick again.
+  if [ "$FS" = "zfs" ]; then
+    msg "ZFS root is not yet bootable on the Security Ops kernel (no in-tree ZFS\nmodule). Please choose ext4, Btrfs, or XFS for now." 11
+    continue
+  fi
+  break
+done
 
 # ---------------------------------------------------------------------------
 # 5. Summary + typed confirmation
@@ -319,6 +340,16 @@ SO_UPASS="$UPASS" SO_RPASS="$RPASS" \
   --desktop "$DESKTOP" --fs "$FS" --encrypt "$ENCRYPT" \
   --root-uuid "$ROOT_UUID" --efi-uuid "$EFI_UUID" \
   --luks-uuid "${LUKS_UUID:-}" 2>&3
+
+# Copy the (securityos …) module tree to the TARGET so the installed system can
+# `guix system reconfigure -L /etc/securityos/src /etc/config.scm' forever
+# (guix system init does NOT carry these source modules across on its own).
+log "copying securityos src to target"
+mkdir -p /mnt/etc/securityos
+cp -aL "$SRC" /mnt/etc/securityos/src 2>&3 || \
+  msg "Warning: could not copy the securityos modules to the target. The install
+will still work, but 'guix system reconfigure' will need -L pointing at a copy
+of the securityos source." 11
 
 whiptail --title "$TITLE" --yesno \
   "Config generated at /mnt/etc/config.scm.\n\nReady to build & install the system with:\n  guix system init -L $SRC /mnt/etc/config.scm /mnt\n\nThis downloads/builds the full system (can take a while).\nProceed?" 16 74 || { msg "Stopped before install. Partitions are prepared; you can inspect /mnt/etc/config.scm and finish manually."; exit 0; }

@@ -1,21 +1,21 @@
 ;; -*- mode: scheme; -*-
 ;;; ===========================================================================
-;;; (securityos kernel) — "SecurityOps": hardened + performant Linux 7.1.1
+;;; (securityos kernel) — "SecurityOps": hardened + performant Linux 7.1.2
 ;;; ===========================================================================
 ;;;
-;;; Vanilla Linux 7.1.1 from kernel.org, built with `customize-linux' on top of
+;;; Vanilla Linux 7.1.2 from kernel.org, built with `customize-linux' on top of
 ;;; the proven nonguix blob-kernel config — which keeps the broad driver / Wi-Fi
 ;;; / iso9660 / usb-storage coverage a "boots on any computer" live USB needs
 ;;; (this exact base is what boots the image; a minimal laptop defconfig does
 ;;; not).  A curated Clear-Linux / XanMod-flavoured performance + KSPP hardening
 ;;; overlay is layered on via `#:configs' (all additive / mainline, so the
 ;;; in-build `verify-config' cannot trip).  Named "SecurityOps" via
-;;; `#:extra-version' → `uname -r' = 7.1.1-SecurityOps.
+;;; `#:extra-version' → `uname -r' = 7.1.2-SecurityOps.
 ;;;
 ;;; NOTE on securityops.defconfig: the maintainer's own defconfig (kept in this
 ;;; directory for reference) targets a *patched* kernel — it sets options such
 ;;; as CONFIG_MNATIVE_INTEL (the graysky/Clear-Linux µarch patch) that vanilla
-;;; 7.1.1 does not provide, and is tuned for one LUKS-ext4 Intel laptop rather
+;;; 7.1.2 does not provide, and is tuned for one LUKS-ext4 Intel laptop rather
 ;;; than a portable live image.  Its *spirit* (perf + hardening) is reproduced
 ;;; below with vanilla-safe options; the runtime perf knobs (preempt=full, THP,
 ;;; BBR/fq, zram) live on the kernel command line + sysctl (config.scm).
