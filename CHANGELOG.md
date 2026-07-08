@@ -8,23 +8,32 @@ greeting, `/etc/securityos/build-id`).
 
 © Cristian Cezar Moisés · AGPL-3.0-or-later · sac@securityops.co
 
-> **Current: `1.10.0` ("Security Ops" r8 · guided installer · kernel 7.1.2)** —
+> **Current: `1.10.1` ("Security Ops" r8 · guided installer · kernel 7.1.2)** —
 > a branded on-ISO guided installer (`security-ops-install`) turns the live image
 > into an installed system in minutes; the Esquema rootless container runtime is
 > baked in; the custom kernel moves to Linux **7.1.2**.
 
-## [1.10.0] — 2026-07-04  ("Security Ops" r8 · guided installer · kernel 7.1.2)
+## [1.10.1] — 2026-07-07  ("Security Ops" r8 · guided installer · kernel 7.1.2)
 
-The live image is now **installable**. Everything the live ISO already gave you —
-the hardened kernel, the sway desktop, the security toolset — can now be written
-to a real disk (optionally LUKS-encrypted) by a branded, guided TUI. No manual
-`guix system init`, no hand-written `config.scm`.
+Same feature set as the unreleased 1.10.0 tag, with the installer's generated
+`config.scm` corrected: a real `guix system build` caught that the bootloader
+was handed the `keyboard-layout` procedure instead of a layout record (a dry run
+had missed it), plus reserved-username / non-UEFI / ZFS are now declined before
+any disk is touched, and `locale-definitions` are emitted. 1.10.0 shipped no
+release assets; use 1.10.1.
+
+The live image is now **installable**. The hardened kernel, a Wayland/X11/KDE
+desktop of your choice and a core security toolset can be written to a real disk
+(optionally LUKS-encrypted) by a branded, guided TUI — no manual `guix system
+init`, no hand-written `config.scm`. (The installed system ships a hardened base
++ a curated core toolset; the live image's full arsenal is one `guix install`
+away, and the config stays declarative so you can add whatever you want.)
 
 ### Added
 - **`security-ops-install` — a guided, branded disk installer** shipped *in* the
   live ISO (run `sudo security-ops-install`). A black-background / cyan-text
   **whiptail** TUI with the Security Ops banner walks you through:
-  - **Filesystem**: ext4 · Btrfs · XFS · ZFS *(experimental)*.
+  - **Filesystem**: ext4 · Btrfs · XFS (ZFS is shown but *planned* — see Notes).
   - **Full-disk encryption**: optional **LUKS2** (`cryptsetup luksFormat`), your
     passphrase, never stored.
   - **Desktop**: **Sway** (Wayland, default) · **i3** (X11) · **KDE Plasma**.
@@ -50,10 +59,15 @@ to a real disk (optionally LUKS-encrypted) by a branded, guided TUI. No manual
   activated by the installer so `guix system init` writes to the target disk.
 
 ### Notes
-- ZFS root is **experimental** (out-of-tree module); the installer flags it and
-  it may need manual steps after first boot. ext4 / Btrfs / XFS are fully wired.
-- Generated configs were validated by lowering (`guix system build`) for every
-  desktop × filesystem × LUKS combination.
+- **ZFS root is not yet selectable.** Root-on-ZFS needs an out-of-tree module the
+  Security Ops kernel doesn't carry; the installer lists ZFS but declines it (with
+  a clear message) rather than wipe a disk it can't finish. ext4 / Btrfs / XFS are
+  fully wired. UEFI only for now (grub-efi + ESP).
+- Validation: the generated config's shared structure (kernel, initrd, GRUB
+  config + keymap, services) was proven with a **real** `guix system build`
+  (Sway/ext4); the i3/KDE and Btrfs/XFS/LUKS variants were validated by lowering
+  (`guix system build -n`). A dry run alone is not enough — it missed a real
+  GRUB keyboard-layout bug that only a full build surfaced (now fixed).
 
 ## [1.9.0] — 2026-06-30  ("Security Ops" r7 · sway-only · blazing-fast)
 

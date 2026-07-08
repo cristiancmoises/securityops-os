@@ -7,7 +7,7 @@
 **A hardened, privacy-focused, reproducible GNU Guix System — as a boot-anywhere live ISO.**
 *Custom Linux 7.1.2-SecurityOps · sway (Wayland) · guided disk installer · curated offensive & forensics toolkit · Tor on tap.*
 
-`build r7 · sway-only · fast` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
+`build r8 · installer · kernel 7.1.2` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
 
 </div>
 
@@ -96,14 +96,16 @@ sudo head -c <iso-byte-size> /dev/sdX | sha256sum     # must match the ISO sha25
 Or drop the `.iso` into a **Ventoy** partition and boot it (use *"Boot in normal mode"*).
 
 ### 3. Boot & log in
-At GRUB pick the entry for your machine (the menu is stamped with the build id):
+At GRUB pick the entry for your machine (**five entries**, each stamped with the
+build id):
 
 | Entry | Use it when |
 |---|---|
 | **Security Ops (auto-detect GPU)** | Default — works almost everywhere |
 | **Security Ops — Intel GPU (i915)** | Intel box with a working GPU |
 | **Security Ops — AMD GPU (amdgpu)** | AMD/Radeon box with a working GPU |
-| **Security Ops — Intel/AMD CPU (no GPU / safe graphics)** | `nomodeset` software fallback |
+| **Security Ops — Intel CPU (no GPU / safe graphics)** | Intel, `nomodeset` software fallback |
+| **Security Ops — AMD CPU (no GPU / safe graphics)** | AMD, `nomodeset` software fallback |
 
 Log in as **`securityops` / `securityops`** (passwordless `sudo`) → you land
 straight in **sway**. `cat /etc/securityos/build-id` confirms which build you booted.
@@ -124,7 +126,7 @@ for you — **no manual `guix system init`, no hand-written config**:
 
 | Choice | Options |
 |---|---|
-| **Filesystem** | ext4 · Btrfs · XFS · ZFS *(experimental)* |
+| **Filesystem** | ext4 · Btrfs · XFS  *(ZFS is listed but planned — UEFI only for now)* |
 | **Encryption** | optional **LUKS2** full-disk (your passphrase, never stored) |
 | **Desktop** | **Sway** (Wayland) · **i3** (X11) · **KDE Plasma** |
 | **Locale / timezone / keyboard / hostname** | picked from menus |
@@ -132,8 +134,11 @@ for you — **no manual `guix system init`, no hand-written config**:
 
 It **generates a self-contained declarative `/etc/config.scm`** for your exact
 choices, partitions the disk, makes the filesystem and runs `guix system init`.
-Your installed system stays 100 % declarative — keep the file and
-`sudo guix system reconfigure /etc/config.scm` forever.
+The installed system ships a **hardened base + a curated core toolset** (the
+live image's full arsenal is one `guix install` away). It stays 100 %
+declarative — the installer also copies the `(securityos …)` modules to the
+target, so `sudo guix system reconfigure -L /etc/securityos/src /etc/config.scm`
+works forever.
 
 > **Safety:** nothing is written until you **type the target device path** to
 > confirm. The installer refuses the disk you booted from, warns on targets with

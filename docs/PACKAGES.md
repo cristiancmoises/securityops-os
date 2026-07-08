@@ -3,7 +3,7 @@
 Every package shipped in the live image, by function. Grounded in
 `config.scm` (system profile), `securityos/home.scm` (Guix Home for the
 `securityops` user), and the **securityops** channel. Generated for build
-`r7 · sway-only`.
+`r8 · installer · kernel 7.1.2`.
 
 
 
@@ -336,7 +336,7 @@ Every package shipped in the live image, by function. Grounded in
 |---|---|
 | evelin | Post-quantum transport (ML-KEM-1024 / ML-DSA-87 / ChaCha20-Poly1305), prebuilt static-musl binaries |
 | esquema | Rootless, Guile-native container runtime — user/mount/PID/UTS/IPC/net/cgroup namespaces, `pivot_root`, cap-drop, seccomp-BPF allowlist, `NO_NEW_PRIVS` |
-| security-ops-installer | Guided black-on-cyan whiptail disk installer (`security-ops-install`): ext4/btrfs/xfs/zfs, LUKS2, Sway/i3/KDE, generates `config.scm` + runs `guix system init` |
+| security-ops-installer | Guided black-on-cyan whiptail disk installer (`security-ops-install`): ext4/btrfs/xfs (zfs planned), LUKS2, Sway/i3/KDE, generates `config.scm` + runs `guix system init` |
 | vaptvupt | Post-quantum backup compressor CLI (ML-KEM-768 + X25519, Argon2id, AES-256-CTR + HMAC) |
 | vaptvupt-gui | PySide6/Qt6 frontend for `.zupt` archives |
 | turborec | Screen + audio recorder (CLI + Tk GUI) |
