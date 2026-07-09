@@ -71,7 +71,7 @@ cat > "${OUT}.tmpl" <<'SCHEME'
 ;;; installer copied that tree to the target for you.)
 (use-modules (gnu) (gnu system nss) (gnu system shadow) (gnu system locale)
              (srfi srfi-1)
-             (securityos kernel)          ; linux-securityos 7.1.2 (hardened)
+             (securityos kernel)          ; linux-securityos 7.1.3 (hardened)
              (nongnu packages linux)      ; linux-firmware
              (securityos packages esquema)) ; Esquema container runtime
 (use-service-modules base desktop networking ssh sysctl)

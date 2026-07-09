@@ -5,9 +5,9 @@
 ### *In Code We Trust.*
 
 **A hardened, privacy-focused, reproducible GNU Guix System — as a boot-anywhere live ISO.**
-*Custom Linux 7.1.2-SecurityOps · sway (Wayland) · guided disk installer · curated offensive & forensics toolkit · Tor on tap.*
+*Custom Linux 7.1.3-SecurityOps · sway (Wayland) · guided disk installer · curated offensive & forensics toolkit · Tor on tap.*
 
-`build r8 · installer · kernel 7.1.2` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
+`build r9 · fast · kernel 7.1.3` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
 
 </div>
 
@@ -110,15 +110,16 @@ build id):
 Log in as **`securityops` / `securityops`** (passwordless `sudo`) → you land
 straight in **sway**. `cat /etc/securityos/build-id` confirms which build you booted.
 
-> **Default sway keys:** `Super+Return` terminal · `Super+d` launcher · `Super+q`
-> close · `Super+1..9` workspaces · `Super+Shift+e` exit · volume/brightness media keys.
+> **Default sway keys:** `Super+Return` terminal · `Super+d` launcher · `Super+e`
+> browser · `Super+Shift+I` **install to disk** · `Super+q` close · `Super+1..9`
+> workspaces · `Super+Shift+e` exit · volume/brightness media keys.
 
 ### 4. Install it to disk (optional — guided)
 
 Like what you booted? Put it on a real disk with the built-in guided installer:
 
 ```sh
-sudo security-ops-install
+security-ops-install
 ```
 
 A branded black-on-cyan TUI walks you through everything and then does the work

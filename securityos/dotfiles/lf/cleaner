@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+# Stop this session's frame-cycler FIRST — and WAIT for it to die — then remove
+# the preview overlay. Without the wait, an in-flight "add" can land after our
+# "remove" and the old animation sticks on top of every later preview.
+# State files are per-session (keyed on the per-session FIFO) so concurrent lf
+# windows don't stop each other's animations.
+
+d="$HOME/.cache/lf"
+sid="${FIFO_UEBERZUG##*/ueberzug-}"
+case "$sid" in ''|"$FIFO_UEBERZUG") sid="nofifo" ;; esac
+pidf="$d/anim.$sid.pid"
+tokf="$d/anim.$sid.token"
+
+rm -f "$tokf"
+if [ -f "$pidf" ]; then
+    p=$(cat "$pidf" 2>/dev/null)
+    rm -f "$pidf"
+    if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+        kill "$p" 2>/dev/null
+        i=0
+        while [ "$i" -lt 8 ] && kill -0 "$p" 2>/dev/null; do
+            sleep 0.03
+            i=$((i + 1))
+        done
+    fi
+fi
+
+# bounded write (a dead ueberzugpp reader would otherwise block open(2) forever)
+if [ -n "$FIFO_UEBERZUG" ] && [ -p "$FIFO_UEBERZUG" ]; then
+    printf '{"action":"remove","identifier":"PREVIEW"}\n' \
+        | timeout 2 sh -c 'cat > "$1"' _ "$FIFO_UEBERZUG" 2>/dev/null
+fi

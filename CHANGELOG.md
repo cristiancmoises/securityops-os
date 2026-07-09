@@ -8,10 +8,43 @@ greeting, `/etc/securityos/build-id`).
 
 © Cristian Cezar Moisés · AGPL-3.0-or-later · sac@securityops.co
 
-> **Current: `1.10.1` ("Security Ops" r8 · guided installer · kernel 7.1.2)** —
-> a branded on-ISO guided installer (`security-ops-install`) turns the live image
-> into an installed system in minutes; the Esquema rootless container runtime is
-> baked in; the custom kernel moves to Linux **7.1.2**.
+> **Current: `1.11.0` ("Security Ops" r9 · fast · kernel 7.1.3)** — installer
+> now actually launches (and one-key from sway), the `berkeley`-user terminal
+> breakage is fixed, kernel moves to **7.1.3** with more hardening + perf, and a
+> pile of requested apps land (LibreWolf, qBittorrent, VaptVupt, lf inline-image
+> preview, feh, …) plus the maintainer's channels as the system `guix pull` default.
+
+## [1.11.0] — 2026-07-08  ("Security Ops" r9 · fast · kernel 7.1.3)
+
+### Fixed
+- **Terminals/apps failing for a nonexistent `berkeley` user.** `kitty.conf` and
+  `alacritty.toml` hardcoded the build host's `/home/berkeley/.guix-profile/bin/fish`;
+  they now use `/run/current-system/profile/bin/fish`, which exists for the live
+  `securityops` user.
+- **The installer would not start.** `security-ops-install` self-elevated with
+  `sudo -E` (refused by the default `env_reset`) and `sudo`'s `secure_path` didn't
+  include the Guix profile. Now it re-execs via `sudo` with the **absolute** script
+  path (no `-E`), the sudoers gets a `secure_path` that includes the profile, and
+  it fails loudly if `whiptail` is somehow missing.
+
+### Added
+- **One-key installer launch:** `Super+Shift+I` in sway opens the guided installer;
+  the plain command is now just `security-ops-install` (no `sudo` needed).
+- **Apps:** **LibreWolf** (hardened Firefox; the `Super+e` bind), **qBittorrent**,
+  **VaptVupt** (PQ backup/compression), plus **feh**, **ueberzugpp**, **chafa**,
+  **xclip**. (Turbo Recorder, Esquema, ungoogled-chromium, mpv were already in.)
+- **`lf` terminal file manager with real inline image preview** — the maintainer's
+  ueberzugpp `preview`/`cleaner` scripts + `lfrc` are shipped to `~/.config/lf` and
+  `~/.local/bin/lf`, so images (and animated gif/webp/video frames) render directly
+  in the terminal pane; `chafa` is the tty fallback.
+- **Channels baked in:** `/etc/guix/channels.scm` is the maintainer's set (guix +
+  nonguix + guix-xlibre + securityops), so `guix pull` on the running system picks
+  up the securityops/guix-xlibre packages.
+
+### Changed
+- **Kernel → Linux 7.1.3** with an expanded overlay: **Landlock** LSM,
+  `FORTIFY_SOURCE`, `SCHED_STACK_END_CHECK` (security) and **MGLRU on by default**
+  (`LRU_GEN_ENABLED`) + the **CAKE** qdisc (performance).
 
 ## [1.10.1] — 2026-07-07  ("Security Ops" r8 · guided installer · kernel 7.1.2)
 

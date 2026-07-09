@@ -51,4 +51,4 @@ opacity = 10  # Adjusted opacity for a slight translucent effect (optional)
 
 [terminal]
   # Define shell program
-  shell = "/home/berkeley/.guix-profile/bin/fish"
+  shell = "/run/current-system/profile/bin/fish"

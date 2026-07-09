@@ -15,7 +15,7 @@
 #   Filesystems : ext4 · btrfs · xfs · zfs(experimental)
 #   Encryption  : LUKS2 full-disk (optional)
 #   Desktops    : Sway (Wayland) · i3 (X11) · KDE Plasma
-#   Kernel      : linux-securityos 7.1.2 (hardened, from (securityos kernel))
+#   Kernel      : linux-securityos 7.1.3 (hardened, from (securityos kernel))
 #
 # © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later
 # ============================================================================
@@ -48,9 +48,16 @@ helpline=cyan,black
 roottext=cyan,black
 '
 export PATH="/run/current-system/profile/bin:/run/current-system/profile/sbin:$PATH"
+# CRITICAL: sudo's env_reset strips TERMINFO_DIRS (even without -E), so after the
+# self-elevation re-exec whiptail/slang can't find foot's (or any) terminfo and
+# dies "Unknown terminal: foot" before drawing a thing.  Re-point it at the
+# system profile, which ships every terminal's terminfo (foot, kitty, …).
+export TERMINFO_DIRS="/run/current-system/profile/share/terminfo${TERMINFO_DIRS:+:$TERMINFO_DIRS}"
 SRC=/etc/securityos/src          # embedded (securityos …) modules, for guix -L
 TITLE="Security Ops OS · Installer"
-LOG=/tmp/security-ops-install.log
+# per-uid log so a root-owned /tmp log from a prior `sudo' run can't EACCES the
+# unprivileged pre-elevation open below.
+LOG="/tmp/security-ops-install.$(id -u).log"
 exec 3>>"$LOG"
 log(){ echo "[$(date +%T)] $*" >&3; }
 
@@ -80,8 +87,18 @@ MODIFIED; /mnt was unmounted and any LUKS mapping closed. Re-run to start over."
 }
 trap 'on_err $LINENO' ERR
 
-need_root(){ [ "$(id -u)" -eq 0 ] || exec sudo -E "$0" "$@"; }
+# Self-elevate.  Run it as the live user (no `sudo' needed) — we re-exec through
+# sudo with the ABSOLUTE script path ($0 is resolved when found via PATH), which
+# works regardless of sudo's secure_path, and WITHOUT `-E' (default env_reset
+# would otherwise refuse `-E' and the installer would "not start").  The re-exec
+# re-runs this file from the top as root, re-exporting NEWT_COLORS + PATH.
+need_root(){ [ "$(id -u)" -eq 0 ] && return 0; exec sudo -- "$0" "$@"; }
 need_root "$@"
+
+# Hard requirement: the whiptail TUI.  Fail loudly (not silently) if absent.
+command -v whiptail >/dev/null 2>&1 || {
+  echo "security-ops-install: 'whiptail' not found on PATH — cannot draw the installer." >&2
+  exit 1; }
 
 msg(){ whiptail --title "$TITLE" --msgbox "$1" "${2:-14}" "${3:-74}"; }
 yesno(){ whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-74}"; }
@@ -180,7 +197,7 @@ done
 # ---------------------------------------------------------------------------
 DESKTOP=$(menu "Desktop / window manager:" \
   "sway" "Sway — Wayland tiling (default, fastest)" \
-  "i3"   "i3 — X11 tiling (XLibre/Xorg)" \
+  "i3"   "i3 — X11 tiling (Xorg)" \
   "kde"  "KDE Plasma — full desktop") || exit 1
 
 # ---------------------------------------------------------------------------
@@ -248,7 +265,7 @@ SUMMARY="Please review — this will ERASE $DISK:
   Locale      : $LOCALE
   Timezone    : $TIMEZONE
   Keyboard    : $KEYMAP $XKBVARIANT
-  Kernel      : linux-securityos 7.1.2 (hardened)"
+  Kernel      : linux-securityos 7.1.3 (hardened)"
 # Show the full review in a TALL msgbox (an inputbox would clip the last lines),
 # then ask for the typed confirmation in its own short box.
 whiptail --title "$TITLE — review" --scrolltext --msgbox "$SUMMARY" 20 76
@@ -376,7 +393,7 @@ clear
 cat <<BANNER
   ────────────────────────────────────────────────────────────────
    Security Ops OS — installing to $DISK
-   $FS · $([ "$ENCRYPT" = yes ] && echo 'LUKS2 encrypted' || echo 'no encryption') · $DESKTOP desktop · kernel 7.1.2
+   $FS · $([ "$ENCRYPT" = yes ] && echo 'LUKS2 encrypted' || echo 'no encryption') · $DESKTOP desktop · kernel 7.1.3
    This downloads/builds the full system; it can take a while.
    Full log: $LOG
   ────────────────────────────────────────────────────────────────
