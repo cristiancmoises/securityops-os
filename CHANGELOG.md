@@ -8,10 +8,18 @@ greeting, `/etc/securityos/build-id`).
 
 © Cristian Cezar Moisés · AGPL-3.0-or-later · sac@securityops.co
 
-> **Current: `1.12.0` ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)** —
-> the guided installer *really* works now (it used the non-setuid `sudo`);
-> **WezTerm is the default terminal** (foot removed); the maintainer's safe fish
-> aliases are ported; a `schedutil` CPU-governor perf tweak at boot.
+> **Current: `1.12.1` ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)** —
+> point release: trims two `starship.toml` keys unknown to starship 1.25.1 so the
+> first shell no longer prints config warnings. Otherwise identical to 1.12.0.
+
+## [1.12.1] — 2026-07-09  ("Security Ops" r10 · starship-clean)
+
+### Fixed
+- **Two `starship.toml` keys logged config warnings on first shell.** Removed
+  `[status].error_symbol` (an `[character]` key, invalid under `[status]`) and
+  `[python].scan_for_pyfiles` (removed from starship). Verified with starship
+  1.25.1: `starship prompt` now emits no config warnings; the prompt is unchanged.
+  Everything else is identical to 1.12.0.
 
 ## [1.12.0] — 2026-07-09  ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)
 
