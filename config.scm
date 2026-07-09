@@ -74,7 +74,7 @@
  admin antivirus base cmake commencement compression compton cryptsetup curl disk
  dns emacs engineering file file-systems firmware fonts fontutils freedesktop gl
  glib gnome gnupg gnuzilla golang-crypto hardware i2p image image-viewers imagemagick
- linux lsof lxde monitoring mtools music ncdu networking nss password-utils pciutils
+ linux lsof lxde monitoring mtools music ncdu ncurses networking nss password-utils pciutils
  pdf photo pulseaudio python rsync rust-apps security-token shells shellutils slang
  ssh suckless terminals text-editors tls tmux tor version-control video vim vpn w3m
  web-browsers wget wm xdisorg xorg
@@ -128,7 +128,7 @@
   ;; The COMPLETE sway desktop, all in the SYSTEM profile so it is on PATH the
   ;; instant greetd hands off — the session never waits on Guix-Home activation.
   (list sway swaybg swayidle swaylock                ; compositor + idle/lock
-        foot wofi bemenu rofi wezterm                ; terminals + launchers
+        wezterm wofi bemenu rofi                     ; terminal (wezterm) + launchers
         waybar mako                                  ; bar + notifications
         grim slurp wl-clipboard wlr-randr wlsunset   ; screenshots / clipboard / outputs
         network-manager-applet                       ; nm-applet (waybar tray Wi-Fi)
@@ -195,7 +195,7 @@
   (list security-ops-installer newt cryptsetup))
 
 (define %sysutil-packages
-  (list util-linux pciutils usbutils dmidecode hwinfo hdparm nvme-cli
+  (list util-linux pciutils usbutils dmidecode hwinfo hdparm nvme-cli ncurses
         lm-sensors ethtool iproute net-tools psmisc procps strace ltrace
         gcc-toolchain git gnu-make cmake python
         ;; firmware blobs for hardware that needs them (Wi-Fi/GPU/etc.).
@@ -402,19 +402,22 @@ SafeLogging 1
    ;; Performance / resilience.
    (service zram-device-service-type %zram-config)
    (service earlyoom-service-type %earlyoom-config)
-   ;; Multi-Gen LRU is compiled in (CONFIG_LRU_GEN=y) but not default-on; enable
-   ;; it + a 1s min-TTL at boot for markedly better page reclaim under memory
-   ;; pressure (the live root is a RAM overlay, so this matters).
-   (simple-service 'enable-mglru shepherd-root-service-type
+   ;; Boot-time performance tuning (best-effort, all writes guarded).  MGLRU is
+   ;; now default-on in the kernel (r9 LRU_GEN_ENABLED=y); we still set its 1 s
+   ;; min-TTL for smoother reclaim under the RAM-overlay live root.  We also move
+   ;; every CPU to the modern `schedutil' governor for snappier frequency ramp
+   ;; (falls back silently to the kernel default if the cpufreq driver lacks it).
+   (simple-service 'securityos-perf-tune shepherd-root-service-type
      (list (shepherd-service
-            (provision '(enable-mglru))
-            (requirement '(file-systems))
+            (provision '(securityos-perf-tune))
+            (requirement '(udev file-systems))
             (one-shot? #t)
             (start #~(make-forkexec-constructor
                       (list "/bin/sh" "-c"
                             (string-append
-                             "echo y > /sys/kernel/mm/lru_gen/enabled 2>/dev/null; "
-                             "echo 1000 > /sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null; true"))))
+                             "echo 1000 > /sys/kernel/mm/lru_gen/min_ttl_ms 2>/dev/null; "
+                             "for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do "
+                             "echo schedutil > \"$g\" 2>/dev/null; done; true"))))
             (stop #~(make-kill-destructor)))))
 
    ;; ───────────────────────────────────────────────────────────────────────

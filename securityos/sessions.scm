@@ -13,7 +13,7 @@
 ;;; Login: greetd + tuigreet (a tiny GL-free TUI) with a SINGLE session (sway),
 ;;; so there is nothing to choose — log in and you are in sway.
 ;;;
-;;; FAST FIRST LAUNCH: sway and ALL the apps it autostarts (foot, waybar, mako,
+;;; FAST FIRST LAUNCH: sway and ALL the apps it autostarts (wezterm, waybar, mako,
 ;;; wofi, swaybg, nm-applet) live in the SYSTEM profile (see config.scm), so they
 ;;; are on PATH the instant greetd hands off — the session does NOT block waiting
 ;;; for the per-user Guix-Home activation.  The fontconfig cache is pre-warmed at
@@ -34,7 +34,7 @@
 ;; Bump this on every build so the running image is identifiable at a glance
 ;; (shown in the GRUB menu, the login greeting, /etc/securityos/build-id and the
 ;; MOTD).  This is how we tell "is the laptop actually booting the NEW image?".
-(define %build-version "r9 · 2026-07-08 · fast · installer · kernel 7.1.3")
+(define %build-version "r10 · 2026-07-09 · wezterm · fast · kernel 7.1.3")
 
 ;; Minimal env prelude.  The desktop's core apps are in the SYSTEM profile, so we
 ;; no longer block on Guix-Home activation; we just put the home profile on PATH
@@ -55,7 +55,7 @@
 (define %sway-config-fallback
   (mixed-text-file "sway-config-fallback" "\
 set $mod Mod4
-set $term foot
+set $term wezterm
 output * bg " %wallpaper-path " fill
 input type:keyboard { xkb_layout \"br\" xkb_variant \"abnt2\" }
 input type:touchpad { tap enabled drag enabled natural_scroll enabled scroll_method two_finger click_method button_areas dwt enabled middle_emulation enabled accel_profile adaptive }
@@ -69,6 +69,7 @@ bindsym $mod+d exec wofi --show drun
 bindsym $mod+q kill
 bindsym $mod+Shift+c reload
 bindsym $mod+Shift+e exec swaynag -t warning -m 'Exit sway?' -B 'Yes' 'swaymsg exit'
+bindsym $mod+Shift+i exec $term start -- security-ops-install
 include /etc/sway/config.d/*
 "))
 

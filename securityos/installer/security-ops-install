@@ -47,7 +47,11 @@ fullscale=,cyan
 helpline=cyan,black
 roottext=cyan,black
 '
-export PATH="/run/current-system/profile/bin:/run/current-system/profile/sbin:$PATH"
+# /run/setuid-programs (and its newer alias /run/privileged/bin) MUST come first:
+# the copy of sudo in the system profile is NOT setuid, so `sudo' resolved from
+# there fails with "sudo: effective uid is not 0 … nosuid".  The real setuid sudo
+# lives in /run/setuid-programs, so put it ahead of the profile on PATH.
+export PATH="/run/setuid-programs:/run/privileged/bin:/run/current-system/profile/bin:/run/current-system/profile/sbin:$PATH"
 # CRITICAL: sudo's env_reset strips TERMINFO_DIRS (even without -E), so after the
 # self-elevation re-exec whiptail/slang can't find foot's (or any) terminfo and
 # dies "Unknown terminal: foot" before drawing a thing.  Re-point it at the
@@ -92,7 +96,16 @@ trap 'on_err $LINENO' ERR
 # works regardless of sudo's secure_path, and WITHOUT `-E' (default env_reset
 # would otherwise refuse `-E' and the installer would "not start").  The re-exec
 # re-runs this file from the top as root, re-exporting NEWT_COLORS + PATH.
-need_root(){ [ "$(id -u)" -eq 0 ] && return 0; exec sudo -- "$0" "$@"; }
+need_root(){
+  [ "$(id -u)" -eq 0 ] && return 0
+  # Use the SETUID sudo explicitly (the profile copy is nosuid → "effective uid
+  # is not 0"); fall back to a PATH lookup only if neither setuid path exists.
+  local s
+  for s in /run/setuid-programs/sudo /run/privileged/bin/sudo; do
+    [ -u "$s" ] && exec "$s" -- "$0" "$@"    # setuid only; `test -u' follows symlinks
+  done
+  exec sudo -- "$0" "$@"                     # PATH fallback (leads with setuid dirs)
+}
 need_root "$@"
 
 # Hard requirement: the whiptail TUI.  Fail loudly (not silently) if absent.

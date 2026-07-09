@@ -8,11 +8,38 @@ greeting, `/etc/securityos/build-id`).
 
 © Cristian Cezar Moisés · AGPL-3.0-or-later · sac@securityops.co
 
-> **Current: `1.11.0` ("Security Ops" r9 · fast · kernel 7.1.3)** — installer
-> now actually launches (and one-key from sway), the `berkeley`-user terminal
-> breakage is fixed, kernel moves to **7.1.3** with more hardening + perf, and a
-> pile of requested apps land (LibreWolf, qBittorrent, VaptVupt, lf inline-image
-> preview, feh, …) plus the maintainer's channels as the system `guix pull` default.
+> **Current: `1.12.0` ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)** —
+> the guided installer *really* works now (it used the non-setuid `sudo`);
+> **WezTerm is the default terminal** (foot removed); the maintainer's safe fish
+> aliases are ported; a `schedutil` CPU-governor perf tweak at boot.
+
+## [1.12.0] — 2026-07-09  ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)
+
+### Fixed
+- **The installer still didn't run — the real culprit was `sudo` itself.** The
+  script put `/run/current-system/profile/bin` first on `PATH`, so `sudo`
+  resolved to the **non-setuid** store copy and failed with *"effective uid is
+  not 0 … nosuid"*. Now `PATH` leads with `/run/setuid-programs:/run/privileged/bin`
+  and `need_root` execs the setuid sudo explicitly. (This is on top of the r9
+  `TERMINFO_DIRS` fix.)
+
+### Changed
+- **WezTerm is the default terminal; `foot` is removed.** `$term` is WezTerm in
+  the sway config, the autostart and `Super+Return` open it, and the installer
+  keybind uses `wezterm start --`. `wezterm.lua` is tuned for a boot-anywhere
+  image: `front_end = 'OpenGL'` (works on the Mesa **llvmpipe** software renderer
+  of the no-GPU entries, not just real GPUs), `default_prog` = **fish**, and a
+  font fallback through fonts the image actually ships. `lf`'s inline preview
+  automatically uses WezTerm's kitty graphics protocol.
+- **Ported the maintainer's safe fish aliases** — only the self-contained subset
+  (`c`, `e`, `f`, `ll`, `ls`, `grep`, `del`, `s`, `7`, `zip`, `gu`, `repair`,
+  `enc`/`dec`, `isolate`, `lf`, …); nothing pointing at private scripts, hosts,
+  keys or `/home` paths (the ISO stays sanitized).
+
+### Performance
+- Boot one-shot now also moves every CPU to the modern **`schedutil`** governor
+  (best-effort) for snappier frequency scaling, alongside the r9 MGLRU-default +
+  CAKE and the existing zram / earlyoom / fontconfig-prewarm.
 
 ## [1.11.0] — 2026-07-08  ("Security Ops" r9 · fast · kernel 7.1.3)
 

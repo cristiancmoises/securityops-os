@@ -3,7 +3,7 @@
 Every package shipped in the live image, by function. Grounded in
 `config.scm` (system profile), `securityos/home.scm` (Guix Home for the
 `securityops` user), and the **securityops** channel. Generated for build
-`r9 · fast · kernel 7.1.3`.
+`r10 · wezterm · kernel 7.1.3`.
 
 
 
@@ -49,10 +49,9 @@ Every package shipped in the live image, by function. Grounded in
 
 | Package | What it does |
 |---|---|
-| foot | Lightweight Wayland terminal emulator |
+| wezterm | **Default terminal** (OpenGL, fish shell, kitty-graphics image preview) |
 | alacritty | GPU-accelerated terminal emulator |
 | kitty | GPU-accelerated terminal emulator |
-| wezterm | GPU terminal with multiplexer |
 | cool-retro-term | Retro CRT-style terminal emulator |
 | fish | Friendly interactive shell |
 | starship | Fast cross-shell prompt |
