@@ -1,5 +1,4 @@
 [status]
-error_symbol = ""
 format = """
 [$directory](bold cyan)($git_branch$git_state$git_status$git_metrics)
 $time $hostname $username [»](bold green) """
@@ -17,9 +16,6 @@ style = "bold cyan"
 truncate_to_repo = false
 truncation_length = 1
 fish_style_pwd_dir_length = 1
-
-[python]
-scan_for_pyfiles = false
 
 [ruby]
 disabled = true
