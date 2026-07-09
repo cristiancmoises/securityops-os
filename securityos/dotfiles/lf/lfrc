@@ -1,0 +1,65 @@
+# --- Preview ---
+set previewer ~/.local/bin/lf/preview
+set cleaner ~/.local/bin/lf/cleaner
+set preview true
+
+# --- Play animated media (gif/webp looping, or video) in mpv (press A) ---
+cmd play_animated ${{
+    case "$f" in
+        *.gif|*.webp|*.apng)
+            mpv --loop-file=inf --no-osc --really-quiet --autofit=50% "$f" ;;
+        *.mp4|*.mkv|*.webm|*.avi|*.mov|*.m4v|*.mpg|*.mpeg|*.flv|*.wmv|*.ts|*.m2ts|*.ogv)
+            mpv --really-quiet --autofit=70% "$f" ;;
+        *) mpv --really-quiet "$f" ;;
+    esac
+}}
+map A play_animated
+set ratios 2:5     # Left = 2, Right = 5 (preview)
+set drawbox true
+
+# --- Sorting ---
+set sortby time
+set reverse true
+
+# --- IFS ---
+set ifs "\n"
+
+# --- Quit ---
+cmd q :quit
+
+# --- Copy filename ---
+cmd copy_filename ${{ 
+    clean_filename=$(basename "$f")
+    printf "%s" "${clean_filename%.*}" | wl-copy
+}}
+map <c-e> :copy_filename <ret>
+
+# --- Open files (single definition below; <c-o> also triggers it) ---
+map <c-o> :open <ret>
+
+# --- Abrir arquivos diretamente ---
+cmd open ${{ 
+    case "$f" in
+        *.gif|*.webp|*.apng)
+            # animated -> mpv looping (feh would only show a static frame)
+            mpv --loop-file=inf --no-osc --really-quiet --autofit=60% "$f"
+            ;;
+        *.jpg|*.jpeg|*.png|*.bmp|*.svg)
+            # Abre toda a pasta com Feh em fullscreen, zoom automático e nome do arquivo
+            feh --fullscreen \
+                --auto-zoom \
+                --draw-filename \
+                --reload 1 \
+                --sort filename \
+                --action1 "echo next" \
+                --action2 "echo prev" \
+                "$(dirname "$f")"
+            ;;
+        *.mp4|*.mkv) 
+            mpv "$f"
+            ;;
+        *) 
+            xdg-open "$f"
+            ;;
+    esac
+}}

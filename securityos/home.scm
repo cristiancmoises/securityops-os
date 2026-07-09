@@ -235,6 +235,9 @@
      ;; launchers / browser
      "bindsym $mod+Return exec $term\nbindsym $mod+d exec $menu\n"
      "bindsym $mod+e exec librewolf 2>/dev/null || chromium\n"
+     ;; one-key launch of the guided disk installer (Super+Shift+I); on a
+     ;; non-zero exit keep the window open so the error is readable.
+     "bindsym $mod+Shift+i exec $term -e sh -c 'security-ops-install || { echo; echo \"installer exited $? — press Enter to close\"; read _; }'\n"
      ;; window management (sway-native keys)
      "bindsym $mod+q kill\nbindsym $mod+Shift+c reload\n"
      "bindsym $mod+Shift+e exec swaynag -t warning -m 'Exit sway?' -B 'Yes' 'swaymsg exit'\n"
@@ -285,7 +288,8 @@
 command -q starship; and starship init fish | source
 command -q zoxide;   and zoxide init fish | source
 command -q fastfetch; and fastfetch
-alias tsocks 'torsocks'\n")))))
+alias tsocks 'torsocks'
+alias lf '$HOME/.local/bin/lf/lfrun'\n")))))
      (simple-service 'securityos-xdg-dotfiles
                      home-xdg-configuration-files-service-type
                      ;; r7 sway-only: dropped xmonad/xmobar/picom dotfiles.
@@ -296,4 +300,16 @@ alias tsocks 'torsocks'\n")))))
                            (list "kitty/kitty.conf"   (local-file "dotfiles/kitty/kitty.conf"))
                            (list "rofi/config.rasi"   (local-file "dotfiles/rofi/config.rasi"))
                            (list "starship.toml"      (local-file "dotfiles/starship/starship.toml"))
-                           (list "wezterm/wezterm.lua" (local-file "dotfiles/wezterm/wezterm.lua"))))))))
+                           (list "wezterm/wezterm.lua" (local-file "dotfiles/wezterm/wezterm.lua"))
+                           ;; lf: terminal file manager with inline image preview
+                           (list "lf/lfrc"            (local-file "dotfiles/lf/lfrc"))
+                           (list "lf/colors"          (local-file "dotfiles/lf/colors"))))
+     ;; lf's ueberzugpp preview + cleaner scripts → ~/.local/bin/lf/ (keep +x).
+     ;; This is what makes `lf' show real images directly in the terminal.
+     (simple-service 'securityos-lf-scripts home-files-service-type
+                     (list (list ".local/bin/lf/lfrun"
+                                 (local-file "dotfiles/lf/lfrun" #:recursive? #t))
+                           (list ".local/bin/lf/preview"
+                                 (local-file "dotfiles/lf/preview" #:recursive? #t))
+                           (list ".local/bin/lf/cleaner"
+                                 (local-file "dotfiles/lf/cleaner" #:recursive? #t))))))))

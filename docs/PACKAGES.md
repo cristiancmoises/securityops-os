@@ -3,7 +3,7 @@
 Every package shipped in the live image, by function. Grounded in
 `config.scm` (system profile), `securityos/home.scm` (Guix Home for the
 `securityops` user), and the **securityops** channel. Generated for build
-`r8 · installer · kernel 7.1.2`.
+`r9 · fast · kernel 7.1.3`.
 
 
 
@@ -81,6 +81,7 @@ Every package shipped in the live image, by function. Grounded in
 
 | Package | What it does |
 |---|---|
+| librewolf | Hardened Firefox fork (default browser, Super+e) |
 | icecat | GNU privacy-focused Firefox derivative |
 | torbrowser | Tor Browser bundle |
 | ungoogled-chromium | De-Googled Chromium browser |
@@ -183,7 +184,7 @@ Every package shipped in the live image, by function. Grounded in
 
 | Package | What it does |
 |---|---|
-| lf | Terminal file manager |
+| lf | Terminal file manager (inline image preview via ueberzugpp) |
 | ranger | Vi-style terminal file manager |
 | ncdu | NCurses disk-usage analyzer |
 | gparted | Graphical partition editor |
@@ -348,8 +349,9 @@ Every package shipped in the live image, by function. Grounded in
 
 ---
 
-**Not baked in (install post-boot):** `librewolf` (no substitute, long
-from-source build) — `guix install librewolf`. All legacy X11 packages
-(xmonad/xmobar/picom/xterm) were removed — the image is **sway-only** Wayland.
+**r9 additions:** `librewolf` (now baked in — the Super+e browser), `qbittorrent`,
+`vaptvupt` (PQ backup), and the `lf` inline-preview stack (`feh`, `ueberzugpp`,
+`chafa`, `xclip`). All legacy X11 packages (xmonad/xmobar/picom/xterm) were
+removed — the image is **sway-only** Wayland.
 
 _© Cristian Cezar Moisés · contact sac@securityops.co · AGPL-3.0-or-later_

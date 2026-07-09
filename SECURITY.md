@@ -1,6 +1,6 @@
 # Security Policy & Hardening Reference — Security Ops OS
 
-*Custom Linux **7.1.2-SecurityOps** · GNU Guix System live ISO · sway-only Wayland · guided installer*
+*Custom Linux **7.1.3-SecurityOps** · GNU Guix System live ISO · sway-only Wayland · guided installer*
 © Cristian Cezar Moisés · contact **sac@securityops.co**
 
 This document describes (1) **how to report a vulnerability**, and (2) the
@@ -32,7 +32,7 @@ lockdown / module-signature enforcement.
 
 ## Layer 1 — Kernel build hardening (KSPP `CONFIG_*` actually built into the ISO)
 
-The ISO kernel is `linux-securityos` (vanilla Linux 7.1.2 + the nonguix
+The ISO kernel is `linux-securityos` (vanilla Linux 7.1.3 + the nonguix
 broad-driver base config + an **additive** KSPP/perf overlay via
 `customize-linux`). Only mainline, additive options are used.
 
@@ -47,12 +47,21 @@ broad-driver base config + an **additive** KSPP/perf overlay via
 | `SECURITY_YAMA=y` | Yama LSM — backs the `ptrace_scope` restriction below. |
 | `SECURITY_DMESG_RESTRICT=y` | Default-restricted dmesg (reinforced by sysctl). |
 | `BUG_ON_DATA_CORRUPTION=y` | Turns list/structure corruption into a hard `BUG()` — fail-closed. |
+| `SECURITY_LANDLOCK=y` *(r9)* | Landlock LSM — unprivileged, per-process filesystem/network sandboxing. |
+| `FORTIFY_SOURCE=y` *(r9)* | Compile-time + runtime bounds checks on `mem*`/`str*` (buffer-overflow detection). |
+| `SCHED_STACK_END_CHECK=y` *(r9)* | Panics on kernel-stack overflow instead of silently corrupting memory. |
 
-> **Honest scope.** The broader KSPP set in `securityos/securityops.defconfig`
+*Performance (r9): `NET_SCH_CAKE=m` (bufferbloat-killing qdisc) and
+`LRU_GEN_ENABLED=y` — MGLRU is now **on by default in the kernel**, not just
+toggled at boot.*
+
+> **Honest scope.** Landlock *is* now built **and initialized** (r9 adds
+> `CONFIG_SECURITY_LANDLOCK=y` + `lsm=landlock,yama,bpf` on the kernel cmdline).
+> The rest of the broader KSPP set in `securityos/securityops.defconfig`
 > (`RANDSTRUCT_FULL`, `PAGE_TABLE_CHECK`, `STRICT_KERNEL_RWX`, `VMAP_STACK`,
-> `LANDLOCK`, `APPARMOR`, IMA, `DM_CRYPT`/`DM_VERITY`…) belongs to the
-> maintainer's **separate, dormant** single-laptop kernel and is **not** applied
-> to this ISO. We only claim what the image actually builds.
+> `APPARMOR`, IMA, `DM_CRYPT`/`DM_VERITY`…) belongs to the maintainer's
+> **separate, dormant** single-laptop kernel and is **not** applied to this ISO.
+> We only claim what the image actually builds.
 
 ---
 

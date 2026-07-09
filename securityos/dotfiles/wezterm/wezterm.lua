@@ -74,6 +74,5 @@ config.visual_bell = {
 }
 
 -- Ensure Iosevka is available
-config.font_dirs = { '/home/' .. os.getenv('USER') .. '/.local/share/fonts' }
 
 return config

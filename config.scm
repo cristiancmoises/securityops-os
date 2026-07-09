@@ -5,14 +5,14 @@
 ;;; ===========================================================================
 ;;;
 ;;; A portable, "boot-it-anywhere" live image of the securityops workstation:
-;;; a hardened, privacy-focused GNU/Linux loaded with security tooling, TWO
-;;; selectable tiling desktops (xmonad on X11, sway on Wayland), and the
-;;; SecurityOps logo on the GRUB menu and both desktops.
+;;; a hardened, privacy-focused GNU/Linux loaded with security tooling, a
+;;; sway (Wayland) tiling desktop, a guided disk installer, and the
+;;; SecurityOps logo on the GRUB menu and the desktop.
 ;;;
 ;;; Modular (Testament-style) layout — the moving parts live in their own
 ;;; modules under ./securityos, tied together here:
-;;;     (securityos kernel)    -> linux-securityos  (custom Linux 7.1)
-;;;     (securityos sessions)  -> greeter + xmonad/sway sessions
+;;;     (securityos kernel)    -> linux-securityos  (custom Linux 7.1.3)
+;;;     (securityos sessions)  -> greeter + sway session
 ;;;
 ;;; Build:   ./build.sh                 (wraps `guix system image -t iso9660`)
 ;;; Output:  an .iso you write to a USB stick (raw `dd`) or drop into Ventoy.
@@ -65,7 +65,8 @@
  (securityos home)                ; %home-environment (Guix Home)
  (securityos packages evelin)     ; evelin — PQ transport (prebuilt static binaries)
  (securityos packages esquema)    ; esquema — rootless, Guile-native container runtime
- (securityos packages installer)) ; security-ops-install — guided disk installer
+ (securityos packages installer)  ; security-ops-install — guided disk installer
+ (securityos packages vaptvupt))  ; vaptvupt — same vendored build home.scm uses
 
 (use-service-modules base desktop linux networking shepherd sysctl xorg)
 
@@ -77,6 +78,7 @@
  pdf photo pulseaudio python rsync rust-apps security-token shells shellutils slang
  ssh suckless terminals text-editors tls tmux tor version-control video vim vpn w3m
  web-browsers wget wm xdisorg xorg
+ bittorrent librewolf                       ; qbittorrent, librewolf
  chromium tor-browsers)                     ; ungoogled-chromium, torbrowser
 
 ;; nonguix LAST so its blob-enabled `linux-firmware' shadows any gnu bindings.
@@ -86,10 +88,8 @@
              (small-guix packages mullvad)  ; mullvad-vpn-desktop
              (securityops packages apps)    ; torando-gui
              (securityops services torando)) ; torando-gui-service-type
-;; NOTE: librewolf is NOT baked in — it OOMs/fails to compile on this 16 GB
-;; host (the Rust/dom-canvas phase under -j24; same blocker noted in the
-;; workstation config).  Install post-boot:  guix install librewolf
-;; (ideally with `--cores=4` on a host with more RAM, or from a substitute).
+;; librewolf IS baked in (r9): the ISO build reuses the already-built store item
+;; (see %browser-packages), so no from-source compile happens at image time.
 
 ;;; ---------------------------------------------------------------------------
 ;;; Identity & knobs
@@ -146,11 +146,11 @@
   (list emacs vim neovim nano))
 
 (define %browser-packages
-  ;; Full browser set (securityops / nonguix channels).  NOTE: `librewolf' is
-  ;; intentionally NOT here — it has no substitute and builds from source for
-  ;; hours (even the maintainer's own machine left it unbuilt).  Install it
-  ;; post-boot:  guix install librewolf
+  ;; Full browser set (securityops / nonguix channels).  librewolf is now baked
+  ;; in (r9) — it builds from source for hours, so the ISO build reuses the
+  ;; already-built store item; the sway `Super+e' keybind launches it.
   (list icecat w3m lynx
+        librewolf                     ; hardened Firefox fork (Super+e)
         ungoogled-chromium            ; the "chromium" the M-we xmonad keybind spawns
         torbrowser                    ; Tor Browser
         google-chrome-stable          ; nonguix
@@ -184,7 +184,9 @@
         ;; Security Ops post-quantum transport (prebuilt static musl binaries)
         evelin
         ;; Security Ops rootless container runtime (C + Guile FFI sandbox)
-        esquema))
+        esquema
+        ;; Security Ops post-quantum backup & compression (CLI + Qt GUI)
+        vaptvupt))
 
 (define %installer-packages
   ;; The guided disk installer + the CLI tools it drives.  parted / the mkfs.*
@@ -203,6 +205,13 @@
 (define %media-packages
   (list mpv zathura zathura-pdf-poppler imagemagick
         pavucontrol playerctl alsa-utils
+        qbittorrent                     ; torrent client (Qt GUI)
+        ;; terminal image preview for lf: ueberzugpp draws real images in the
+        ;; pane over a FIFO; chafa is the tty fallback; feh opens images
+        ;; fullscreen; xclip for the lf copy-filename bind.  ffmpeg(+thumbnailer),
+        ;; poppler (pdftoppm) and atool give lf its video / PDF / archive previews.
+        feh ueberzugpp chafa xclip
+        ffmpeg ffmpegthumbnailer poppler atool
         turborec))            ; securityops channel: screen+audio recorder (CLI + Tk GUI)
 
 (define %font-packages
@@ -345,6 +354,10 @@ SafeLogging 1
                        (plain-file "build-id" (string-append %build-version "\n")))
    ;; The image's own source tree, for "boot it and rebuild it".
    (extra-special-file "/etc/securityos/src" %config-src)
+   ;; The maintainer's channels (guix + nonguix + guix-xlibre + securityops) as
+   ;; the SYSTEM-WIDE `guix pull' default, so `guix pull' on the running system
+   ;; picks up the securityops/guix-xlibre channels and their packages.
+   (extra-special-file "/etc/guix/channels.scm" (local-file "channels.scm"))
    ;; turborecorder at the exact path the xmonad M-r keybind expects.
    (extra-special-file "/usr/bin/turborecorder"
                        (local-file "securityos/dotfiles/turborecorder"
@@ -358,8 +371,8 @@ SafeLogging 1
 
    user: securityops   pass: securityops   (passwordless sudo)
 
-   Install to disk:  sudo security-ops-install
-       guided TUI · ext4/btrfs/xfs/zfs · LUKS2 · Sway/i3/KDE · Esquema
+   Install to disk:  security-ops-install     (or press Super+Shift+I)
+       guided TUI · ext4/btrfs/xfs · LUKS2 · Sway/i3/KDE · Esquema
 
 ")))))
 
@@ -458,6 +471,11 @@ SafeLogging 1
     "page_alloc.shuffle=1"                  ; randomise the free-page lists
     "randomize_kstack_offset=on"            ; per-syscall kernel stack offset
     "vsyscall=none"                         ; kill the legacy vsyscall page
+    ;; Actually INITIALISE the LSMs we build: the kernel-config CONFIG_LSM order
+    ;; doesn't include Landlock, so without this `lsm=' the LANDLOCK=y we added
+    ;; (kernel.scm) never activates.  yama (ptrace_scope) + bpf kept; lockdown is
+    ;; intentionally OMITTED (the security model deliberately avoids it).
+    "lsm=landlock,yama,bpf"
     ;; --- performance (Clear-Linux / XanMod flavour, config-free) ---
     "preempt=full"                          ; low-latency desktop scheduling
     "transparent_hugepage=madvise"          ; THP only where asked (latency)
@@ -517,6 +535,7 @@ SafeLogging 1
 
     (sudoers-file
      (plain-file "sudoers" "\
+Defaults secure_path=\"/run/privileged/bin:/run/setuid-programs:/run/current-system/profile/bin:/run/current-system/profile/sbin\"
 root ALL=(ALL) ALL
 %wheel ALL=(ALL) NOPASSWD: ALL
 "))
