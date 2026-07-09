@@ -1,18 +1,23 @@
 local wezterm = require 'wezterm'
 local config = wezterm.config_builder()
 
--- GPU acceleration settings
-config.front_end = 'WebGpu'
-config.webgpu_power_preference = 'HighPerformance'
+-- Renderer: OpenGL works on real GPUs AND on the live image's Mesa llvmpipe
+-- software renderer (the nomodeset / no-GPU boot entries).  WebGpu would need a
+-- Vulkan backend that isn't guaranteed on a boot-anywhere image.
+config.front_end = 'OpenGL'
 config.prefer_egl = true
+
+-- Launch fish (the live user's shell) as a login shell — the account's default
+-- shell is bash, so ask for fish explicitly (matches kitty/alacritty).
+config.default_prog = { '/run/current-system/profile/bin/fish', '-l' }
 
 -- Disable close confirmation for tabs and window
 config.skip_close_confirmation_for_processes_named = {}
 config.window_close_confirmation = 'NeverPrompt'
 
--- Font configuration
-config.font = wezterm.font('Iosevka Nerd Font', { weight = 'Regular', stretch = 'Normal', style = 'Normal' })
-config.font_size = 16.0
+-- Font configuration — fall back through fonts the live image actually ships.
+config.font = wezterm.font_with_fallback({ 'Iosevka Term', 'JetBrains Mono', 'DejaVu Sans Mono', 'Terminus' })
+config.font_size = 14.0
 config.line_height = 1.0
 
 -- Color scheme
@@ -41,17 +46,16 @@ config.use_resize_increments = true
 
 -- Keybindings
 local act = wezterm.action
+-- Use CTRL|SHIFT so the bare control chars (^T ^Q ^V ^H ^N) stay available to
+-- TUI apps (editors, shells, less, …) running inside the terminal.
 config.keys = {
-  { key = 't', mods = 'CTRL', action = act.SpawnTab 'CurrentPaneDomain' },
-  { key = 'q', mods = 'CTRL', action = act.CloseCurrentTab { confirm = false } },
-  { key = 'v', mods = 'CTRL', action = act.SplitHorizontal { domain = 'CurrentPaneDomain' } },
-  { key = 'h', mods = 'CTRL', action = act.SplitVertical { domain = 'CurrentPaneDomain' } },
-  { key = 'n', mods = 'CTRL', action = act.ActivatePaneDirection 'Next' },
+  { key = 't', mods = 'CTRL|SHIFT', action = act.SpawnTab 'CurrentPaneDomain' },
+  { key = 'q', mods = 'CTRL|SHIFT', action = act.CloseCurrentTab { confirm = false } },
+  { key = 'v', mods = 'CTRL|SHIFT', action = act.SplitHorizontal { domain = 'CurrentPaneDomain' } },
+  { key = 'h', mods = 'CTRL|SHIFT', action = act.SplitVertical { domain = 'CurrentPaneDomain' } },
+  { key = 'n', mods = 'CTRL|SHIFT', action = act.ActivatePaneDirection 'Next' },
   { key = '+', mods = 'CTRL', action = act.IncreaseFontSize },
   { key = '-', mods = 'CTRL', action = act.DecreaseFontSize },
-  { key = 's', mods = 'CTRL|SHIFT', action = act.SpawnCommandInNewTab {
-    args = { 'ssh', 'user@remote' }, -- Replace with your SSH details
-  } },
 }
 
 -- Enable image display

@@ -52,10 +52,20 @@ fi
 
 # desktop / WM service + package fragments (all use %desktop-services + a DM)
 case "${A[desktop]}" in
-  sway) DESKTOP_PKGS='sway swaybg swayidle swaylock waybar foot wofi mako wl-clipboard grim slurp' ;;
+  sway) DESKTOP_PKGS='sway swaybg swayidle swaylock waybar wezterm wofi mako wl-clipboard grim slurp' ;;
   i3)   DESKTOP_PKGS='i3-wm i3status i3lock dmenu xterm xorg-server rofi feh' ;;
   kde)  DESKTOP_PKGS='plasma plasma-desktop konsole dolphin' ;;
 esac
+
+# For sway, ship a working ~/.config/sway/config as a user skeleton — otherwise
+# the installed system falls back to sway's STOCK config, which execs `foot'
+# (we don't ship it) and `wmenu-run' (never installed) → no terminal/launcher.
+# Uses wezterm (the default terminal) + wofi.  i3/KDE get GDM sessions, no skel.
+if [ "${A[desktop]}" = sway ]; then
+  SKELETONS="(skeletons (cons (list \".config/sway/config\" (plain-file \"sway-config\" \"set \$mod Mod4\\nset \$term wezterm\\nset \$menu wofi --show drun\\noutput * bg #000000 solid_color\\ndefault_border pixel 2\\nexec mako\\nbar { swaybar_command waybar }\\nbindsym \$mod+Return exec \$term\\nbindsym \$mod+d exec \$menu\\nbindsym \$mod+e exec librewolf\\nbindsym \$mod+q kill\\nbindsym \$mod+Shift+c reload\\nbindsym \$mod+Shift+e exec swaymsg exit\\nbindsym \$mod+Shift+i exec \$term start -- security-ops-install\\n\")) (default-skeletons)))"
+else
+  SKELETONS=""
+fi
 
 XKB=""
 [ -n "${A[xkbvariant]}" ] && XKB=" \"${A[xkbvariant]}\""
@@ -125,7 +135,7 @@ cat > "${OUT}.tmpl" <<'SCHEME'
                               (home-directory "/root") (password "@@RHASH@@"))
                 (remove (lambda (a) (equal? (user-account-name a) "root"))
                         %base-user-accounts)))
-
+  @@SKELETONS@@
   (packages
    (append
     (list @@DESKTOP_PKGS@@
@@ -174,10 +184,11 @@ guile -c '
         (cons "UHASH" (list-ref (command-line) 14))
         (cons "DESKTOP_PKGS" (list-ref (command-line) 15))
         (cons "RHASH" (list-ref (command-line) 16))
-        (cons "LOCALESRC" (list-ref (command-line) 17))))
+        (cons "LOCALESRC" (list-ref (command-line) 17))
+        (cons "SKELETONS" (list-ref (command-line) 18))))
 (call-with-output-file (cadr (command-line)) (lambda (p) (display t p)))
 ' "$OUT" "$HOST_E" "${A[locale]}" "${A[tz]}" "${A[keymap]}" "$XKB" \
   "$MKMODS" "$CRYPTMODS" "$MAPPED" "$ROOTFS" "${A[efi-uuid]}" \
-  "$USER_E" "$FULLNAME_E" "$UHASH" "$DESKTOP_PKGS" "$RHASH" "$LOCALE_SRC"
+  "$USER_E" "$FULLNAME_E" "$UHASH" "$DESKTOP_PKGS" "$RHASH" "$LOCALE_SRC" "$SKELETONS"
 rm -f "${OUT}.tmpl"
 echo "wrote $OUT"

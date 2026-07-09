@@ -7,7 +7,7 @@
 **A hardened, privacy-focused, reproducible GNU Guix System — as a boot-anywhere live ISO.**
 *Custom Linux 7.1.3-SecurityOps · sway (Wayland) · guided disk installer · curated offensive & forensics toolkit · Tor on tap.*
 
-`build r9 · fast · kernel 7.1.3` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
+`build r10 · wezterm · kernel 7.1.3` &nbsp;•&nbsp; © Cristian Cezar Moisés &nbsp;•&nbsp; AGPL-3.0-or-later &nbsp;•&nbsp; sac@securityops.co
 
 </div>
 

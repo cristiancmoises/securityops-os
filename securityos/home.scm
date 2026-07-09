@@ -190,7 +190,7 @@
    ;; liberation, noto, jetbrains-mono, terminus, awesome, iosevka-term, …).
    ;; Shipping ~90 more here only slowed the first-app launch (fontconfig scans
    ;; them all) and bloated the image, so they were dropped for r6.
-   flatpak-xdg-utils    fnott    foot    fping    fuse    fuse-exfat
+   flatpak-xdg-utils    fnott    fping    fuse    fuse-exfat
    ;; r6: dev toolchains (gcc/ghc/go/rust/node/openjdk/ruby), heavy GUI apps
    ;; (libreoffice/gimp/krita/obs/qemu/virt-manager/telegram/steam), the Qt
    ;; stack (pulled in automatically as deps), media libs, and SYSTEM-profile
@@ -220,7 +220,7 @@
 (define %sway-config
   (mixed-text-file "sway-config"
     (string-append
-     "set $mod Mod4\nset $term foot\nset $menu wofi --show drun\n"
+     "set $mod Mod4\nset $term wezterm\nset $menu wofi --show drun\n"
      "output * bg " %wallpaper " fill\n"
      "default_border pixel 2\ndefault_floating_border pixel 2\nhide_edge_borders smart\n"
      ;; Real input handling (adopted from the maintainer's working config).
@@ -237,7 +237,7 @@
      "bindsym $mod+e exec librewolf 2>/dev/null || chromium\n"
      ;; one-key launch of the guided disk installer (Super+Shift+I); on a
      ;; non-zero exit keep the window open so the error is readable.
-     "bindsym $mod+Shift+i exec $term -e sh -c 'security-ops-install || { echo; echo \"installer exited $? — press Enter to close\"; read _; }'\n"
+     "bindsym $mod+Shift+i exec $term start -- sh -c 'security-ops-install || { echo; echo \"installer exited $? — press Enter to close\"; read _; }'\n"
      ;; window management (sway-native keys)
      "bindsym $mod+q kill\nbindsym $mod+Shift+c reload\n"
      "bindsym $mod+Shift+e exec swaynag -t warning -m 'Exit sway?' -B 'Yes' 'swaymsg exit'\n"
@@ -274,7 +274,6 @@
   \"clock\":{\"format\":\"{:%a %d %b  %H:%M}\"},\"cpu\":{\"format\":\"CPU {usage}%\"},
   \"memory\":{\"format\":\"MEM {}%\"},\"battery\":{\"format\":\"BAT {capacity}%\"},\"tray\":{\"spacing\":8} }\n"))
 
-(define %foot.ini (plain-file "foot.ini" "font=Iosevka Term:size=11\n[colors]\nbackground=000000\nforeground=50fa7b\n"))
 
 (define %home-environment
   (home-environment
@@ -287,15 +286,37 @@
 "set -g fish_greeting ''
 command -q starship; and starship init fish | source
 command -q zoxide;   and zoxide init fish | source
-command -q fastfetch; and fastfetch
-alias tsocks 'torsocks'
-alias lf '$HOME/.local/bin/lf/lfrun'\n")))))
+command -q fastfetch; and fastfetch\n")))
+               ;; The self-contained subset of the maintainer's own aliases
+               ;; (nothing pointing at private scripts, hosts, keys or paths).
+               (aliases
+                `(("lf"     . "$HOME/.local/bin/lf/lfrun")
+                  ("tsocks" . "torsocks")
+                  ("c"      . "clear")
+                  ("e"      . "cd ..")
+                  ("f"      . "fastfetch")
+                  ("p"      . "pfetch")
+                  ("q"      . "exit")
+                  ("ll"     . "ls -l")
+                  ("ls"     . "ls -p --color=auto")
+                  ("grep"   . "grep --color=auto")
+                  ("l"      . "du -h --max-depth=1 .")
+                  ("del"    . "shred -uvz")
+                  ("s"      . "sensors")
+                  ("ee"     . "exiftool -recursive -all=")
+                  ("7"      . "7z x")
+                  ("7a"     . "7z a")
+                  ("gu"     . "guix package -u")
+                  ("repair" . "sudo guix gc --verify=repair,contents")
+                  ("mpv"    . "mpv --audio-pitch-correction=yes")
+                  ("enc"    . "tar -czf - * | openssl enc -e -aes-256-cbc -pbkdf2 -iter 200000 -out secured.tar.gz")
+                  ("dec"    . "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in secured.tar.gz | tar xz")
+                  ("isolate" . "guix shell --container --network --no-cwd")))))
      (simple-service 'securityos-xdg-dotfiles
                      home-xdg-configuration-files-service-type
                      ;; r7 sway-only: dropped xmonad/xmobar/picom dotfiles.
                      (list (list "sway/config"        %sway-config)
                            (list "waybar/config"      %waybar-config)
-                           (list "foot/foot.ini"      %foot.ini)
                            (list "alacritty/alacritty.toml" (local-file "dotfiles/alacritty/alacritty.toml"))
                            (list "kitty/kitty.conf"   (local-file "dotfiles/kitty/kitty.conf"))
                            (list "rofi/config.rasi"   (local-file "dotfiles/rofi/config.rasi"))
