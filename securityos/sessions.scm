@@ -34,7 +34,7 @@
 ;; Bump this on every build so the running image is identifiable at a glance
 ;; (shown in the GRUB menu, the login greeting, /etc/securityos/build-id and the
 ;; MOTD).  This is how we tell "is the laptop actually booting the NEW image?".
-(define %build-version "r10 · 2026-07-09 · wezterm · fast · kernel 7.1.3")
+(define %build-version "r10 · v1.12.1 · wezterm · kernel 7.1.3")
 
 ;; Minimal env prelude.  The desktop's core apps are in the SYSTEM profile, so we
 ;; no longer block on Guix-Home activation; we just put the home profile on PATH

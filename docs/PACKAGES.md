@@ -3,7 +3,7 @@
 Every package shipped in the live image, by function. Grounded in
 `config.scm` (system profile), `securityos/home.scm` (Guix Home for the
 `securityops` user), and the **securityops** channel. Generated for build
-`r10 · wezterm · kernel 7.1.3`.
+`r10 · v1.12.1 · wezterm · kernel 7.1.3`.
 
 
 
