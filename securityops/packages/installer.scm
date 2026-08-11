@@ -9,7 +9,7 @@
 ;;; the installer sets PATH to /run/current-system/profile.
 ;;;
 ;;; © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later
-(define-module (securityos packages installer)
+(define-module (securityops packages installer)
   #:use-module (guix packages)
   #:use-module (guix gexp)
   #:use-module (guix build-system trivial)
@@ -42,11 +42,13 @@
     (description
      "A branded, black-on-cyan @command{whiptail} guided installer that turns
 the Security Ops OS live image into an installed system.  It collects the
-target disk, filesystem (ext4/btrfs/xfs/zfs), optional LUKS2 encryption,
+target disk, filesystem (ext4/btrfs/xfs), optional LUKS2 encryption,
 locale, timezone, keyboard, user accounts and desktop (Sway/i3/KDE Plasma),
 generates a self-contained declarative @file{/etc/config.scm}, partitions the
-disk and runs @command{guix system init}.")
-    (home-page "https://git.securityops.co/cristiancmoises/securityops-os")
+disk and runs @command{guix system init} through the release's pinned channel
+time-machine.  ZFS root is intentionally not offered until kernel and boot
+support are complete.")
+    (home-page "https://git.securityops.com.br/cristiancmoises/securityops-os")
     (license license:agpl3+)))
 
 security-ops-installer

@@ -1,9 +1,13 @@
 # Security Ops OS — Complete Package Inventory
 
 Every package shipped in the live image, by function. Grounded in
-`config.scm` (system profile), `securityos/home.scm` (Guix Home for the
+`config.scm` (system profile), `securityops/home.scm` (Guix Home for the
 `securityops` user), and the **securityops** channel. Generated for build
-`r10 · v1.12.1 · wezterm · kernel 7.1.3`.
+`r11 · v1.13.0 · wezterm · kernel 7.1.8`.
+
+This table documents the curated baseline. Maintainer overrides in
+`securityops/settings.json` may add or mask packages without rewriting that
+baseline; inspect the effective changes with `./securityopsctl package changes`.
 
 
 
@@ -43,7 +47,6 @@ Every package shipped in the live image, by function. Grounded in
 | glib | GLib core application library |
 | gtk | GTK GUI toolkit |
 | librsvg | SVG rendering library |
-| compton | Legacy X11 compositor (vestigial) |
 
 ## Terminals & Shell
 
@@ -334,9 +337,9 @@ Every package shipped in the live image, by function. Grounded in
 
 | Package | What it does |
 |---|---|
-| evelin | Post-quantum transport (ML-KEM-1024 / ML-DSA-87 / ChaCha20-Poly1305), prebuilt static-musl binaries |
+| evelin-bin | Post-quantum transport (ML-KEM-1024 / ML-DSA-87 / ChaCha20-Poly1305), prebuilt static-musl binaries |
 | esquema | Rootless, Guile-native container runtime — user/mount/PID/UTS/IPC/net/cgroup namespaces, `pivot_root`, cap-drop, seccomp-BPF allowlist, `NO_NEW_PRIVS` |
-| security-ops-installer | Guided black-on-cyan whiptail disk installer (`security-ops-install`): ext4/btrfs/xfs (zfs planned), LUKS2, Sway/i3/KDE, generates `config.scm` + runs `guix system init` |
+| security-ops-installer | Guided black-on-cyan whiptail disk installer (`security-ops-install`): ext4/btrfs/xfs (ZFS planned/disabled), LUKS2, Sway/i3/KDE, generates a mode-0600 `config.scm` + runs `guix system init` through the pinned channel time-machine |
 | vaptvupt | Post-quantum backup compressor CLI (ML-KEM-768 + X25519, Argon2id, AES-256-CTR + HMAC) |
 | vaptvupt-gui | PySide6/Qt6 frontend for `.zupt` archives |
 | turborec | Screen + audio recorder (CLI + Tk GUI) |

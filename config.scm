@@ -10,9 +10,9 @@
 ;;; SecurityOps logo on the GRUB menu and the desktop.
 ;;;
 ;;; Modular (Testament-style) layout — the moving parts live in their own
-;;; modules under ./securityos, tied together here:
-;;;     (securityos kernel)    -> linux-securityos  (custom Linux 7.1.3)
-;;;     (securityos sessions)  -> greeter + sway session
+;;; modules under ./securityops, tied together here:
+;;;     (securityops kernel)    -> linux-securityops  (version from settings.json)
+;;;     (securityops sessions)  -> greeter + sway session
 ;;;
 ;;; Build:   ./build.sh                 (wraps `guix system image -t iso9660`)
 ;;; Output:  an .iso you write to a USB stick (raw `dd`) or drop into Ventoy.
@@ -32,13 +32,13 @@
 ;;; (see %initrd-extra-modules), so a raw-`dd'd USB stick mounts its own root
 ;;; instead of panicking with "unable to mount root fs".
 ;;;
-;;; HARDENING / PERFORMANCE: a custom Linux 7.1 (vanilla kernel.org, config
+;;; HARDENING / PERFORMANCE: configurable vanilla kernel.org Linux (config
 ;;; derived from the proven nonguix kernel) + memory-hardening kernel cmdline
 ;;; flags + a sysctl profile + zram swap + earlyoom.  None of it cripples the
 ;;; pentest/forensics toolset (no lockdown, no module-signature enforcement).
 ;;;
 ;;; "USE MY GUIX": the whole (sanitised) source tree of this image is embedded
-;;; at /etc/securityos/src on the running system, so anyone who boots it can
+;;; at /etc/securityops/src on the running system, so anyone who boots it can
 ;;; read, tweak and rebuild the exact configuration.
 ;;;
 ;;; Maintainer: Cristian Cezar Moisés <sac@securityops.co>
@@ -57,16 +57,16 @@
  (gnu services)                   ; extra-special-file, simple-service
  (gnu services guix)              ; guix-home-service-type
  (guix gexp)
- (srfi srfi-1)
+ (guix packages)                  ; package?, package-name
+ (srfi srfi-1)                    ; filter, delete-duplicates
  (srfi srfi-13)                   ; string-suffix?
  ;; --- our own modules (resolved via `guix … -L .') ---------------------
- (securityos kernel)              ; linux-securityos
- (securityos sessions)            ; %greeter-command
- (securityos home)                ; %home-environment (Guix Home)
- (securityos packages evelin)     ; evelin — PQ transport (prebuilt static binaries)
- (securityos packages esquema)    ; esquema — rootless, Guile-native container runtime
- (securityos packages installer)  ; security-ops-install — guided disk installer
- (securityos packages vaptvupt))  ; vaptvupt — same vendored build home.scm uses
+ (securityops kernel)              ; linux-securityops
+ (securityops settings)            ; maintainer-controlled kernel/packages
+ (securityops sessions)            ; %greeter-command
+ (securityops home)                ; %home-environment (Guix Home)
+ (securityops packages esquema)    ; esquema — rootless, Guile-native container runtime
+ (securityops packages installer)) ; security-ops-install — guided disk installer
 
 (use-service-modules base desktop linux networking shepherd sysctl xorg)
 
@@ -83,10 +83,9 @@
 
 ;; nonguix LAST so its blob-enabled `linux-firmware' shadows any gnu bindings.
 (use-modules (nongnu packages linux)        ; linux-firmware
-             (nongnu system linux-initrd)   ; microcode-initrd
              (nongnu packages chrome)       ; google-chrome-stable
              (small-guix packages mullvad)  ; mullvad-vpn-desktop
-             (securityops packages apps)    ; torando-gui
+             (securityops packages apps)    ; latest Evelin/VaptVupt/Torando packages
              (securityops services torando)) ; torando-gui-service-type
 ;; librewolf IS baked in (r9): the ISO build reuses the already-built store item
 ;; (see %browser-packages), so no from-source compile happens at image time.
@@ -97,24 +96,47 @@
 (define %live-user "securityops")
 (define %kbd (keyboard-layout "br" "abnt2"))   ; the maintainer's layout; change freely
 (define %wallpaper (local-file "assets/sec.png"))    ; the SecurityOps logo
+(define %securityops-substitute-url "https://substitutes.securityops.com.br")
+(define %ci-substitute-url "https://ci.guix.gnu.org")
+(define %securityops-substitute-key
+  (local-file "substitutes.securityops.com.br.pub"))
+(define %ci-substitute-key
+  (local-file "ci.guix.gnu.org.pub"))
 
-;; The image's own (sanitised) source tree, embedded so a booted user can
-;; inspect and rebuild it.  `out/' (the multi-GB built ISOs) and any *.iso are
-;; excluded so the closure stays small.
+;; The image's own (sanitised) build source, embedded so a booted user can
+;; inspect and rebuild it.  Build output, VCS data, local assistant metadata,
+;; and common secret-key file names are excluded.  GET_THE_ISO.md is also
+;; excluded because it records the finished image's own hash; embedding it
+;; would create a checksum cycle where documenting an ISO changes that ISO.
 (define %config-src
-  (local-file "." "securityos-src"
+  (local-file "." "securityops-src"
               #:recursive? #t
               #:select?
               (lambda (file stat)
                 (let ((b (basename file)))
                   (not (or (string=? b "out")
                            (string=? b ".git")
-                           (string-suffix? ".iso" file)))))))
+                           (string=? b ".claude")
+                           (string-prefix? ".aider" b)
+                           (string-prefix? ".codex" b)
+                           (string=? b "continue")
+                           (string=? b "__pycache__")
+                           (string-suffix? ".pyc" b)
+                           (string-suffix? ".pyo" b)
+                           (string=? b "GET_THE_ISO.md")
+                           (string=? b ".env")
+                           (string-prefix? ".env." b)
+                           (string-prefix? "id_" b)
+                           (string-suffix? ".key" b)
+                           (string-suffix? ".pem" b)
+                           (string-suffix? ".token" b)
+                           (string-suffix? "_token" b)
+                           (string-suffix? ".iso" b)))))))
 
 ;; The live user's dotfiles, keybinds and desktop packages are now declared as a
-;; proper GNU Guix Home environment in (securityos home) and applied at boot via
+;; proper GNU Guix Home environment in (securityops home) and applied at boot via
 ;; `guix-home-service-type' (below).  No hand-rolled /etc/skel activation needed;
-;; the configs read the system-wide /etc/securityos/wallpaper.png.
+;; the configs read the system-wide /etc/securityops/wallpaper.png.
 
 ;;; ---------------------------------------------------------------------------
 ;;; Package set — curated from the workstation, minus hardware/heavy bits.
@@ -151,7 +173,7 @@
   ;; already-built store item; the sway `Super+e' keybind launches it.
   (list icecat w3m lynx
         librewolf                     ; hardened Firefox fork (Super+e)
-        ungoogled-chromium            ; the "chromium" the M-we xmonad keybind spawns
+        ungoogled-chromium            ; fallback target for the sway browser keybind
         torbrowser                    ; Tor Browser
         google-chrome-stable          ; nonguix
         mullvad-vpn-desktop           ; Mullvad VPN (GUI + CLI)
@@ -182,7 +204,7 @@
         ;; net basics
         curl wget openssh
         ;; Security Ops post-quantum transport (prebuilt static musl binaries)
-        evelin
+        evelin-bin
         ;; Security Ops rootless container runtime (C + Guile FFI sandbox)
         esquema
         ;; Security Ops post-quantum backup & compression (CLI + Qt GUI)
@@ -198,8 +220,8 @@
   (list util-linux pciutils usbutils dmidecode hwinfo hdparm nvme-cli ncurses
         lm-sensors ethtool iproute net-tools psmisc procps strace ltrace
         gcc-toolchain git gnu-make cmake python
-        ;; firmware blobs for hardware that needs them (Wi-Fi/GPU/etc.).
-        ;; microcode-initrd already carries AMD+Intel ucode for early load.
+        ;; Runtime firmware blobs for hardware that needs them (Wi-Fi/GPU/etc.).
+        ;; Early CPU microcode is intentionally omitted from this live image.
         linux-firmware))
 
 (define %media-packages
@@ -225,19 +247,43 @@
   ;; so GL apps (and sway's wlroots) keep working with no usable GPU.
   (list mesa mesa-utils))
 
+(define (package-item-package item)
+  ;; `specifications->packages' returns (PACKAGE OUTPUT) pairs, whereas the
+  ;; curated lists contain bare packages.  Normalize both shapes here.
+  (if (package? item) item (car item)))
+
+(define (package-item-name item)
+  (package-name (package-item-package item)))
+
+(define (package-item-key item)
+  (string-append (package-item-name item) ":"
+                 (if (package? item) "out" (cadr item))))
+
+(define (package-item=? left right)
+  (string=? (package-item-key left) (package-item-key right)))
+
 (define %live-packages
-  (append %wayland-packages %terminal-packages
-          %editor-packages %browser-packages %fs-packages %security-packages
-          %installer-packages
-          %sysutil-packages %media-packages %font-packages %gl-packages
-          ;; nss-certs (TLS root CAs) is already in %base-packages on the
-          ;; pinned guix, so it is NOT re-listed (avoids a duplicate warning).
-          %base-packages))
+  (delete-duplicates
+   (filter
+    (lambda (item)
+      (not (member (package-item-name item) %package-removals)))
+    (append
+     ;; User additions come first so an explicit version/output wins over the
+     ;; same default-output package in a curated/base list.
+     (specifications->packages %package-additions)
+     %wayland-packages %terminal-packages
+     %editor-packages %browser-packages %fs-packages %security-packages
+     %installer-packages
+     %sysutil-packages %media-packages %font-packages %gl-packages
+     ;; nss-certs (TLS root CAs) is already in %base-packages on the pinned
+     ;; Guix, so it is not re-listed.
+     %base-packages))
+   package-item=?))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Hardening / performance knobs (runtime — none of it breaks pentest tools)
 ;;; ---------------------------------------------------------------------------
-(define %securityos-sysctl
+(define %securityops-sysctl
   ;; Appended AFTER %default-sysctl-settings, so these win on any conflict.
   '(;; --- kernel / process hardening ---
     ("kernel.kptr_restrict" . "2")          ; hide kernel pointers
@@ -312,7 +358,13 @@ table inet filter {
      (config-file
       (plain-file "torrc" "\
 Log notice stderr
-SOCKSPort 127.0.0.1:9050
+SocksPort 127.0.0.1:9050
+VirtualAddrNetworkIPv4 10.192.0.0/10
+AutomapHostsOnResolve 1
+TransPort 127.0.0.1:9040
+DNSPort 127.0.0.1:5353
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
 SafeLogging 1
 ")))))
 
@@ -347,23 +399,24 @@ SafeLogging 1
    (extra-special-file "/lib64/ld-linux-x86-64.so.2"
                        (file-append glibc "/lib/ld-linux-x86-64.so.2"))
    ;; Wallpaper available system-wide (both desktops read this absolute path).
-   (extra-special-file "/etc/securityos/wallpaper.png" %wallpaper)
-   ;; Build identifier — `cat /etc/securityos/build-id' on the running system to
+   (extra-special-file "/etc/securityops/wallpaper.png" %wallpaper)
+   ;; Build identifier — `cat /etc/securityops/build-id' on the running system to
    ;; confirm WHICH image you booted (ends the "is this the new build?" doubt).
-   (extra-special-file "/etc/securityos/build-id"
+   (extra-special-file "/etc/securityops/build-id"
                        (plain-file "build-id" (string-append %build-version "\n")))
    ;; The image's own source tree, for "boot it and rebuild it".
-   (extra-special-file "/etc/securityos/src" %config-src)
-   ;; The maintainer's channels (guix + nonguix + guix-xlibre + securityops) as
+   (extra-special-file "/etc/securityops/src" %config-src)
+   ;; The image's pinned channels (guix, nonguix, sops-guix, gocix, small-guix,
+   ;; and securityops) as
    ;; the SYSTEM-WIDE `guix pull' default, so `guix pull' on the running system
-   ;; picks up the securityops/guix-xlibre channels and their packages.
+   ;; resolves the exact source revisions documented by this release.
    (extra-special-file "/etc/guix/channels.scm" (local-file "channels.scm"))
-   ;; turborecorder at the exact path the xmonad M-r keybind expects.
+   ;; turborecorder at a stable system-wide path.
    (extra-special-file "/usr/bin/turborecorder"
-                       (local-file "securityos/dotfiles/turborecorder"
+                       (local-file "securityops/dotfiles/turborecorder"
                                    #:recursive? #t))   ; keep the +x bit
    ;; TTY login banner with the slogan.
-   (simple-service 'securityos-motd etc-service-type
+   (simple-service 'securityops-motd etc-service-type
      (list (list "motd"
                  (plain-file "motd" (string-append "
    Security Ops  —  In Code We Trust.
@@ -377,7 +430,7 @@ SafeLogging 1
 ")))))
 
    ;; GNU Guix Home for the live user: desktop packages + dotfiles + keybinds
-   ;; (xmonad/xmobar/sway/waybar/foot/fish).  Activated at boot for %live-user.
+   ;; (sway/waybar/wezterm/fish).  Activated at boot for %live-user.
    (service guix-home-service-type
             (list (list %live-user %home-environment)))
 
@@ -407,9 +460,9 @@ SafeLogging 1
    ;; min-TTL for smoother reclaim under the RAM-overlay live root.  We also move
    ;; every CPU to the modern `schedutil' governor for snappier frequency ramp
    ;; (falls back silently to the kernel default if the cpufreq driver lacks it).
-   (simple-service 'securityos-perf-tune shepherd-root-service-type
+   (simple-service 'securityops-perf-tune shepherd-root-service-type
      (list (shepherd-service
-            (provision '(securityos-perf-tune))
+            (provision '(securityops-perf-tune))
             (requirement '(udev file-systems))
             (one-shot? #t)
             (start #~(make-forkexec-constructor
@@ -442,11 +495,20 @@ SafeLogging 1
    ;; udisks, upower, cups, ntp.  We also fold the hardening sysctl in here.
    (modify-services %desktop-services
      (delete gdm-service-type)
+     ;; Ordered, explicit cache policy: Security Ops first, then GNU Guix CI.
+     ;; No other default substitute is inherited; cache misses build from source.
+     (guix-service-type config =>
+       (guix-configuration
+        (inherit config)
+        (substitute-urls
+         (list %securityops-substitute-url %ci-substitute-url))
+        (authorized-keys
+         (list %securityops-substitute-key %ci-substitute-key))))
      (sysctl-service-type config =>
        (sysctl-configuration
         (inherit config)
         (settings (append (sysctl-configuration-settings config)
-                          %securityos-sysctl)))))))
+                          %securityops-sysctl)))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; The live operating-system (parameterised by GRUB menu-entries so we can
@@ -465,7 +527,7 @@ SafeLogging 1
     "modprobe.blacklist=pcspkr"             ; silence the PC speaker beep
     ;; Disable rarely-used, historically-vulnerable network protocols at the
     ;; kernel level (CIS-style hardening).  This replaces a per-login
-    ;; `modprobe -r dccp sctp rds tipc' in the xmonad startupHook that always
+    ;; a historical per-login `modprobe -r dccp sctp rds tipc' hook that always
     ;; failed with EPERM (a user cannot unload modules) and only spewed errors.
     "module_blacklist=dccp,sctp,rds,tipc"
     ;; --- config-free memory hardening (works with the stock kernel config) ---
@@ -482,7 +544,6 @@ SafeLogging 1
     ;; --- performance (Clear-Linux / XanMod flavour, config-free) ---
     "preempt=full"                          ; low-latency desktop scheduling
     "transparent_hugepage=madvise"          ; THP only where asked (latency)
-    "tsc=reliable"                          ; skip TSC re-checks on stable TSCs
     "rcu_nocbs=all"                         ; offload RCU callbacks off the hot CPUs
     "nowatchdog"))                          ; drop the NMI watchdog overhead
 
@@ -500,7 +561,7 @@ SafeLogging 1
 
 (define (make-live-os menu-entries)
   (operating-system
-    (host-name "securityos-live")
+    (host-name "securityops-live")
     (label (string-append "Security Ops (auto-detect GPU) · " %build-version))
     (locale "pt_BR.UTF-8")
     (locale-definitions
@@ -510,7 +571,7 @@ SafeLogging 1
     (keyboard-layout %kbd)
 
     ;; Custom Linux 7.1 (vanilla kernel.org, nonguix-derived config + hardening).
-    (kernel linux-securityos)
+    (kernel linux-securityops)
     (firmware (list linux-firmware))
     ;; IMPORTANT — use the plain base-initrd, NOT nonguix's microcode-initrd.
     ;; microcode-initrd prepends a ~15 MB *uncompressed* early-cpio (the CPU
@@ -518,7 +579,7 @@ SafeLogging 1
     ;; kernel then ends up with NO main initramfs and panics at boot
     ;; ("Kernel panic - not syncing: VFS: Unable to mount root fs on
     ;; unknown-block(0,0)").  Verified by QEMU repro: base-initrd boots to the
-    ;; greeter + xmonad desktop; microcode-initrd panics.  Trade-off: no early
+    ;; greeter + sway desktop; microcode-initrd panics.  Trade-off: no early
     ;; microcode update on this live image (the CPU runs on its built-in
     ;; microcode) — acceptable, and re-addable if booting from a real disk.
     (initrd base-initrd)
@@ -529,7 +590,7 @@ SafeLogging 1
     (users (cons* (user-account
                    (name %live-user)
                    (comment "Security Ops")
-                   (password "$6$securityoslive$TFWUmT31Bk/GLRel0DP/R2wDakumpcEOGvjnzzfGWqmeWe8SGW8EvCoSIpZH9rPIGMZX49Yeh2KuJ5lF7pbzh1") ; "securityops"
+                   (password "$6$securityopslive$9SzkRwpQlDxM9aIw87nH10v9vJPPWMyGgyZWWWoCM4OgZij2gKSNsJ7ALMXrioKEA4YqXqKAhs8tcxjT4UWnP/") ; "securityops"
                    (group "users")
                    (supplementary-groups
                     '("wheel" "netdev" "audio" "video" "input"
@@ -580,7 +641,7 @@ root ALL=(ALL) ALL
 
 ;; The SAME root device the auto entry searches for: the iso9660 volume's
 ;; (deterministic) fs-UUID — NOT a volume label.  build.sh passes
-;; `--label=SECURITYOS_LIVE', which renames the volume but leaves the fs-UUID
+;; `--label=SECURITY_OPS_LIVE', which renames the volume but leaves the fs-UUID
 ;; untouched, so keying on the UUID (`search --fs-uuid') always finds the disc.
 (define %image-root-device
   (file-system-device (operating-system-root-file-system %image-os)))

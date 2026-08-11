@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; -*-
 ;;; ===========================================================================
-;;; (securityos sessions) — login + the sway desktop session
+;;; (securityops sessions) — login + the sway desktop session
 ;;; ===========================================================================
 ;;;
 ;;; Security Ops is now SWAY-ONLY (Wayland).  The entire X11 stack (XLibre +
@@ -21,20 +21,23 @@
 ;;; does not stall for minutes rebuilding it.
 ;;; ===========================================================================
 
-(define-module (securityos sessions)
+(define-module (securityops sessions)
   #:use-module (guix gexp)
   #:use-module (gnu packages admin)        ; tuigreet
   #:use-module (gnu packages bash)         ; bash
   #:use-module (gnu packages glib)         ; dbus
   #:use-module (gnu packages wm)           ; sway
+  #:use-module (securityops settings)
   #:export (%greeter-command %build-version))
 
-(define %wallpaper-path "/etc/securityos/wallpaper.png")
+(define %wallpaper-path "/etc/securityops/wallpaper.png")
 
 ;; Bump this on every build so the running image is identifiable at a glance
-;; (shown in the GRUB menu, the login greeting, /etc/securityos/build-id and the
+;; (shown in the GRUB menu, the login greeting, /etc/securityops/build-id and the
 ;; MOTD).  This is how we tell "is the laptop actually booting the NEW image?".
-(define %build-version "r10 · v1.12.1 · wezterm · kernel 7.1.3")
+(define %build-version
+  (string-append %build-revision " · v" %release-version " · "
+                 %desktop-label " · kernel " %kernel-version))
 
 ;; Minimal env prelude.  The desktop's core apps are in the SYSTEM profile, so we
 ;; no longer block on Guix-Home activation; we just put the home profile on PATH
@@ -74,7 +77,7 @@ include /etc/sway/config.d/*
 "))
 
 (define %sway-launch
-  (program-file "securityos-sway-session"
+  (program-file "securityops-sway-session"
     #~(execl #$(file-append bash "/bin/bash") "bash" "-c"
              (string-append
               #$%env-prelude
@@ -96,7 +99,7 @@ include /etc/sway/config.d/*
               ;; pixman.  /tmp/sway.log always says what happened.
               "if [ -e /dev/dri/renderD128 ]; then "
               "run_sway >/tmp/sway.log 2>&1 || { "
-              "echo '[securityos] hardware renderer failed; retrying with pixman' >>/tmp/sway.log; "
+              "echo '[securityops] hardware renderer failed; retrying with pixman' >>/tmp/sway.log; "
               "WLR_RENDERER=pixman run_sway >>/tmp/sway.log 2>&1; }; "
               "else WLR_RENDERER=pixman run_sway >/tmp/sway.log 2>&1; fi"))))
 
@@ -104,7 +107,7 @@ include /etc/sway/config.d/*
 ;;; Session (tuigreet) + greeter — single sway session
 ;;; ---------------------------------------------------------------------------
 (define %sessions-dir
-  (computed-file "securityos-sessions"
+  (computed-file "securityops-sessions"
     #~(begin
         (mkdir #$output)
         (call-with-output-file (string-append #$output "/sway.desktop")
@@ -115,7 +118,7 @@ include /etc/sway/config.d/*
                       "\nType=Application\n") port))))))
 
 (define %greeter-command
-  (program-file "securityos-greeter"
+  (program-file "securityops-greeter"
     #~(execl #$(file-append tuigreet "/bin/tuigreet") "tuigreet"
              "--time"
              "--remember"

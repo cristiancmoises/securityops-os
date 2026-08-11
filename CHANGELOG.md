@@ -4,13 +4,68 @@ All notable changes to the **Security Ops OS** live image are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); this project
 versions the *image*, not individual packages (those track the pinned channels in
 `channels.scm`). Each build also carries a visible `build-id` (GRUB menu, login
-greeting, `/etc/securityos/build-id`).
+greeting, `/etc/securityops/build-id`).
 
 © Cristian Cezar Moisés · AGPL-3.0-or-later · sac@securityops.co
 
-> **Current: `1.12.1` ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)** —
-> point release: trims two `starship.toml` keys unknown to starship 1.25.1 so the
-> first shell no longer prints config warnings. Otherwise identical to 1.12.0.
+> **Current: `1.13.0` ("Security Ops" r11 · kernel 7.1.8 · authenticated substitutes)** —
+> current stable kernel, Security Ops-first plus GNU Guix CI binary substitutes,
+> refreshed/pinned channels, and a completed internal namespace repair.
+
+## [1.13.0] — 2026-08-10  ("Security Ops" r11 · kernel 7.1.8 · authenticated substitutes)
+
+### Security
+- **Kernel → Linux 7.1.8-SecurityOps**, the current kernel.org stable release,
+  with the existing portable nonguix driver base and KSPP/performance overlay.
+- **Two explicit authenticated binary substitutes:** the live daemon, generated
+  installed systems, installer invocation, and both build modes now use
+  `https://substitutes.securityops.com.br` first and official
+  `https://ci.guix.gnu.org` second, with their pinned Ed25519 keys. No third
+  cache is inherited; misses deliberately build from source.
+
+### Changed
+- Added the interactive/automation-friendly `./securityopsctl` maintainer tool
+  and canonical `securityops/settings.json`: add/remove packages, fetch and
+  verify a new stable kernel.org release, inspect status, validate, and launch
+  an incremental pinned build without hand-editing Scheme. `./make-iso.sh`
+  remains the hardened build engine: it serializes builds, verifies the ISO,
+  and can transactionally create/reassemble-check release parts with `--bundle`.
+- **Channels refreshed and made reproducible:** Guix, nonguix, sops-guix, gocix,
+  small-guix, and securityops are commit-pinned; every channel has its published
+  introduction. Explicit transitive pins prevent small-guix dependencies from
+  following mutable branches. Added the previously missing small-guix closure,
+  removed unused guix-xlibre, and moved Security Ops to its `.com.br` URL.
+- **Current channel applications are used consistently:** Evelin 4.3.0 and
+  VaptVupt/VaptVupt GUI 5.2.1 replace the shadowed older vendored bindings;
+  their unused legacy modules and archives were removed from the image source.
+- **Release retention is latest-only:** superseded remote releases, assets, and
+  tags are pruned after the new release is published to conserve VPS storage.
+
+### Fixed
+- **Completed `securityos` → `securityops` internally.** The module directory,
+  declarations, imports, embedded source path, installer paths, artifact name,
+  and documentation now agree; the half-renamed tree could not load its kernel
+  module and had also corrupted Git's index.
+- Restored the real `linux-securityops` package binding in `config.scm` and
+  replaced the stale live-user SHA-512 hash, so the documented `securityops`
+  login works again.
+- Hardened the embedded-source selector so ignored assistant histories, local
+  assistant settings, Python bytecode, build output, and common private-key/token filenames cannot leak
+  into the published image; sanitized provenance docs no longer repeat host
+  disk or resolver identifiers.
+- The installer-generated system now preserves the same substitute trust policy
+  and pinned channels instead of silently returning to Guix's defaults. Install
+  and reconfigure run through the pinned time-machine so channel modules exist;
+  generated configs are mode 0600, and Sway's browser shortcut has its matching
+  package. The destructive installer and its shortcut are now live-media-only.
+- Installed systems now retain Landlock activation and the live image's
+  default-drop nftables policy, while no SSH daemon is enabled implicitly.
+- The installer resolves the live medium from the kernel's real `root=` device
+  and fails closed if it cannot protect that disk; it also rejects every account
+  name contributed by the generated desktop system.
+- Tor now exposes the loopback TransPort/DNSPort/ControlPort expected by Torando,
+  preventing its opt-in per-user killswitch from redirecting traffic to closed
+  ports. Removed the unsafe universal `tsc=reliable` boot override.
 
 ## [1.12.1] — 2026-07-09  ("Security Ops" r10 · starship-clean)
 
@@ -115,13 +170,13 @@ away, and the config stays declarative so you can add whatever you want.)
     to confirm; it refuses the disk you booted from and warns on mounted targets;
     a `cow-store` overlay routes the install to the target disk (not RAM).
 - **Esquema — rootless, Guile-native container runtime** is now in the system
-  profile (`(securityos packages esquema)`). C sandbox primitives (user / mount /
+  profile (`(securityops packages esquema)`). C sandbox primitives (user / mount /
   PID / UTS / IPC / net / cgroup namespaces, `pivot_root`, full capability drop,
   seccomp-BPF allowlist, `NO_NEW_PRIVS`) exposed to a Guile FFI + Scheme runtime.
   Upstream: `git.securityops.co/cristiancmoises/esquema`.
 
 ### Changed
-- **Custom kernel → Linux 7.1.2** (`linux-securityos`, vanilla kernel.org + the
+- **Custom kernel → Linux 7.1.2** (`linux-securityops`, vanilla kernel.org + the
   same KSPP hardening + performance overlay; `uname -r` = `7.1.2-SecurityOps`).
 - The live config now carries a dormant **`cow-store`** service (auto-start off),
   activated by the installer so `guix system init` writes to the target disk.
@@ -173,7 +228,7 @@ Rename, slim/fast first-launch, real input config, and curated tool additions.
 ### Changed
 - **Renamed the OS to "Security Ops"** in all user-visible text (GRUB menu, login
   greeting, MOTD, README, ISO volume label `SECURITY_OPS_LIVE`).  Internal
-  identifiers (`securityos` modules/paths, `securityops` user, channel) unchanged.
+  identifiers (`securityops` modules/paths, `securityops` user, channel) unchanged.
 - **Faster first launch:**
   - Dropped ~90 home fonts (system `%font-packages` already covers the dotfiles;
     the extra fonts only slowed the first-app fontconfig scan) and removed the
@@ -222,15 +277,15 @@ changed nothing because the real defect was never a dotfile.
   - Fix: the xmonad session now passes an explicit, COMPLETE `-modulepath` to the
     server (the `xlibre-25` tree first, then every video/input driver package),
     plus `-keeptty` so the rootless server keeps DRM master under logind.  See
-    `securityos/sessions.scm` (`%extra-module-dirs`, `%xmonad-launch`).
+    `securityops/sessions.scm` (`%extra-module-dirs`, `%xmonad-launch`).
 - **picom** switched to the `xrender` backend (no GLX consumer left in the X
   session) + `picom -b --backend xrender` belt-and-suspenders.
 
 ### Added
 - **Unmissable build-version stamp** (`%build-version`): in the GRUB menu labels
   (visible before login, survives any GPU failure), the tuigreet greeting,
-  `/etc/securityos/build-id`, and the MOTD — so it is trivial to confirm WHICH
-  image is booted (`cat /etc/securityos/build-id`).
+  `/etc/securityops/build-id`, and the MOTD — so it is trivial to confirm WHICH
+  image is booted (`cat /etc/securityops/build-id`).
 - **Boot diagnostics**: `/tmp/xorg.log` (X server, `-verbose 6`),
   `/tmp/xmonad-session.log`, `/tmp/sway.log`.
 - `build.sh` now writes an **epoch-second-named** ISO + a `.sha256` sidecar so a
@@ -255,7 +310,7 @@ Problems persisted on the real Intel IdeaPad after 1.7.0.  Two decisive changes
   (incl. startupHook spawn errors) to `/tmp/xmonad-session.log`; sway already
   logs to `/tmp/sway.log`.  If anything still misbehaves on real hardware, those
   three files pin the cause instead of guessing.
-- Build now emits a distinctly-named `securityos-live-YYYYMMDD-r2.iso` and
+- Build now emits a distinctly-named `securityops-live-YYYYMMDD-r2.iso` and
   **deletes every other ISO** in `out/`, so there is no chance of burning a
   stale image.
 
@@ -330,7 +385,7 @@ Fix both desktops failing to start on real hardware + cut login lag.
   blank desktop.  The recompile was also the bulk of the **login lag**.
   - Fix: the maintainer's `xmonad.hs` is now **compiled once at image-build time**
     into a standalone `xmonad-x86_64-linux` binary (new package
-    `(securityos packages xmonad-config)`, built against ghc + xmonad-contrib +
+    `(securityops packages xmonad-config)`, built against ghc + xmonad-contrib +
     xmobar + **gcc-toolchain**).  The X session execs it directly — **no runtime
     GHC, no recompile, no gcc dependency, no lag**; WIN (Mod4) keybinds and the
     startupHook are live the instant X comes up.  Verified under Xvfb: it owns
@@ -381,12 +436,12 @@ Home. Driven by feedback that on a Lenovo IdeaPad (Intel) xmonad came up showing
 only the wallpaper and sway was a black screen.
 
 ### Added
-- **`securityos/home.scm` — a real GNU Guix Home** (`%home-environment`):
+- **`securityops/home.scm` — a real GNU Guix Home** (`%home-environment`):
   user-facing packages plus dotfiles & keybinds for both desktops — `xmonad.hs`,
   `xmobar`, `sway`, `waybar`, `foot`, `alacritty`, and `fish` (via
   `home-fish-service-type`). Wired into the live system with
   `guix-home-service-type`, and usable standalone (`guix home reconfigure
-  securityos/home.scm`).
+  securityops/home.scm`).
 
 ### Fixed
 - **Desktops came up empty** (xmonad = bare wallpaper, sway = black screen):
@@ -425,7 +480,7 @@ booting a raw-`dd`'d USB and a request for the latest kernel + hardening + a
 Wayland option.
 
 ### Added
-- **Custom Linux 7.1** (`securityos/kernel.scm` → `linux-securityos`): the
+- **Custom Linux 7.1** (`securityops/kernel.scm` → `linux-securityops`): the
   vanilla kernel.org `linux-7.1.tar.xz`, built with `customize-linux` so its
   config is *derived from* the proven nonguix blob kernel (broad driver / Wi-Fi
   / storage coverage preserved) and adapted to 7.1 via `make olddefconfig`. A
@@ -434,7 +489,7 @@ Wayland option.
   `HARDENED_USERCOPY`, `STACKPROTECTOR_STRONG`, `INIT_ON_ALLOC_DEFAULT_ON`,
   `SECURITY_YAMA`, `DMESG_RESTRICT`). No lockdown / module-signature
   enforcement — that would cripple the pentest/forensics toolset.
-- **Two selectable desktops via greetd + tuigreet** (`securityos/sessions.scm`):
+- **Two selectable desktops via greetd + tuigreet** (`securityops/sessions.scm`):
   a GL-free TUI greeter (rock-solid on any framebuffer, ideal for the no-GPU
   path) with a session chooser and **no default — the operator picks each boot
   (F3)**:
@@ -452,11 +507,11 @@ Wayland option.
   ASLR, fs protections, sane network defaults with *loose* RPF so MITM/forward
   workflows still work; BBR + fq + zram-tuned VM), **zram** zstd swap, and
   **earlyoom** (never sacrifices the compositor/greeter).
-- **Embedded source tree** at `/etc/securityos/src` on the running system (the
+- **Embedded source tree** at `/etc/securityops/src` on the running system (the
   whole sanitised repo minus `out/` and `*.iso`), so anyone who boots the image
   can read, tweak and rebuild this exact Guix configuration.
 - **Modular, Testament-style layout**: the kernel and the login/session
-  machinery now live in their own `(securityos …)` modules, tied together by
+  machinery now live in their own `(securityops …)` modules, tied together by
   `config.scm`.
 
 ### Fixed

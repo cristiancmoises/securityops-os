@@ -1,12 +1,12 @@
 # Security Policy & Hardening Reference — Security Ops OS
 
-*Custom Linux **7.1.3-SecurityOps** · GNU Guix System live ISO · sway-only Wayland · guided installer*
+*Custom Linux **7.1.8-SecurityOps** · GNU Guix System live ISO · sway-only Wayland · guided installer*
 © Cristian Cezar Moisés · contact **sac@securityops.co**
 
 This document describes (1) **how to report a vulnerability**, and (2) the
 **actual, file-grounded hardening** applied by the image. Everything below is
-verified against the real sources — `securityos/kernel.scm`, `config.scm`, and
-`securityos/sessions.scm` — and is honest about what the system *does not* do.
+verified against the real sources — `securityops/kernel.scm`, `config.scm`, and
+`securityops/sessions.scm` — and is honest about what the system *does not* do.
 
 > **Design goal: hardening that does not break offensive/forensic tooling.**
 > There is deliberately *no* kernel lockdown, *no* module-signature enforcement,
@@ -19,7 +19,7 @@ verified against the real sources — `securityos/kernel.scm`, `config.scm`, and
 
 Please report security issues **privately** to **sac@securityops.co** (PGP on
 request). Include affected component, version/build tag (`cat
-/etc/securityos/build-id`), reproduction steps, and impact. We aim to
+/etc/securityops/build-id`), reproduction steps, and impact. We aim to
 acknowledge within **72 hours** and to coordinate a fix and disclosure timeline
 with you. Please do not open public issues for undisclosed vulnerabilities.
 
@@ -32,7 +32,7 @@ lockdown / module-signature enforcement.
 
 ## Layer 1 — Kernel build hardening (KSPP `CONFIG_*` actually built into the ISO)
 
-The ISO kernel is `linux-securityos` (vanilla Linux 7.1.3 + the nonguix
+The ISO kernel is `linux-securityops` (vanilla Linux 7.1.8 + the nonguix
 broad-driver base config + an **additive** KSPP/perf overlay via
 `customize-linux`). Only mainline, additive options are used.
 
@@ -57,7 +57,7 @@ toggled at boot.*
 
 > **Honest scope.** Landlock *is* now built **and initialized** (r9 adds
 > `CONFIG_SECURITY_LANDLOCK=y` + `lsm=landlock,yama,bpf` on the kernel cmdline).
-> The rest of the broader KSPP set in `securityos/securityops.defconfig`
+> The rest of the broader KSPP set in `securityops/securityops.defconfig`
 > (`RANDSTRUCT_FULL`, `PAGE_TABLE_CHECK`, `STRICT_KERNEL_RWX`, `VMAP_STACK`,
 > `APPARMOR`, IMA, `DM_CRYPT`/`DM_VERITY`…) belongs to the maintainer's
 > **separate, dormant** single-laptop kernel and is **not** applied to this ISO.
@@ -83,7 +83,7 @@ DMA). **Caveat:** the default *auto-detect* entry does **not** enable IOMMU.
 
 ---
 
-## Layer 3 — Sysctl hardening (`%securityos-sysctl`, wins on conflict)
+## Layer 3 — Sysctl hardening (`%securityops-sysctl`, wins on conflict)
 
 **Kernel / process:** `kernel.kptr_restrict=2` (hide kernel pointers),
 `kernel.dmesg_restrict=1`, `kernel.yama.ptrace_scope=1` (ptrace children only),
@@ -98,6 +98,19 @@ sticky-dir escalation primitives).
 **Network:** `tcp_syncookies=1`; `rp_filter=2` (**loose** anti-spoof — *loose by
 choice* so MITM/forwarding works); `accept_redirects=0` (v4+v6),
 `send_redirects=0`, `accept_source_route=0` (v4+v6).
+
+---
+
+## Binary substitute trust
+
+The live daemon and every system emitted by the guided installer replace Guix's
+default cache list with exactly two ordered entries:
+`https://substitutes.securityops.com.br` first and the official
+`https://ci.guix.gnu.org` build farm second. Their repository-pinned Ed25519
+public keys are the only substitute keys added by this configuration. `build.sh`
+applies the same URL order to both the time-machine and image stages. Cache
+misses build from source; this does not prevent pinned Git channels or package
+source origins from being fetched.
 
 ---
 
@@ -116,12 +129,15 @@ Zero unsolicited inbound exposure; nothing listens inbound by default.
 
 ---
 
-## Layer 5 — Anonymity (Tor SOCKS, opt-in)
+## Layer 5 — Anonymity (Tor, operator opt-in)
 
-`%tor-service` runs Tor with `SOCKSPort 127.0.0.1:9050` (**loopback only**),
-`SafeLogging 1`. Tooling: `tor`, `torsocks`, `nyx`, `torbrowser`, `i2pd`, and the
-loopback **Torando Control** GUI. **Caveat:** this is an *opt-in SOCKS proxy*,
-**not** transparent system-wide torification — un-proxied apps egress clearnet.
+`%tor-service` exposes loopback-only SOCKS (`9050`), transparent (`9040`), DNS
+(`5353`), and cookie-authenticated control (`9051`) ports with `SafeLogging 1`.
+Nothing redirects traffic merely because those listeners exist. Tooling includes
+`torsocks`, `nyx`, Tor Browser, i2pd, and **Torando Control**; Torando can opt one
+local user into transparent TCP/DNS routing plus a killswitch. **Caveat:** this is
+not forced system-wide torification—other users/apps egress clearnet unless the
+operator explicitly proxies them.
 
 ---
 
@@ -159,17 +175,23 @@ built defensively:
 - **No disk is touched until you type the target device path** to confirm — exact
   string match, no normalization bypass. This is the primary accidental-wipe
   backstop.
-- It **refuses the disk you booted from** (parent-disk of `/`, derived via
-  `lsblk -no pkname`) and **warns on any target with mounted partitions**.
+- It resolves the kernel command line's real `root=` block device (not the live
+  overlay mounted at `/`), traces it to its physical parent disk, and **refuses
+  that boot medium**. Resolution failures stop the installer before partitioning;
+  targets with mounted partitions also trigger a warning.
 - Passwords never hit disk as plaintext or a command line: they travel by
   environment, are hashed with `openssl passwd -6` read from **stdin**, and only
-  the SHA-512 crypt hash is written into the generated `config.scm`.
-- Free-text fields (hostname/user/full name) are validated and **escaped** before
-  they enter the Scheme config, so a `"`/`\` can't corrupt or inject into it.
+  the SHA-512 crypt hash is written into the generated mode-0600 `config.scm`.
+- Hostname and username are validated; every generated Scheme string, including
+  the optional full name, is **escaped**, so a `"`/`\` cannot corrupt or inject
+  into the configuration.
 - On any mid-operation failure the error trap **unmounts `/mnt`, closes the LUKS
   mapping**, and tells you the disk was *partially* modified (no false "done").
-- Success is gated on the **real `guix system init` exit code AND the presence of
-  `/mnt/boot/grub/grub.cfg`** (written last) — never a false-positive signal.
+- Init runs through the release's authenticated pinned `guix time-machine`, with
+  the ordered Security Ops + GNU Guix CI URLs on both stages, so Nonguix/channel
+  modules are available without silently using any third binary cache.
+- Success is gated on the **real pinned `guix system init` exit code AND the
+  presence of `/mnt/boot/grub/grub.cfg`** (written last)—never a false-positive.
 - **Optional LUKS2 full-disk encryption** (`cryptsetup luksFormat`, aes-xts) with
   the matching initrd crypto modules, so an installed system unlocks at boot.
 
@@ -203,5 +225,5 @@ a writable working directory.
 
 ---
 
-*Sources of truth: `securityos/kernel.scm`, `config.scm`, `securityos/sessions.scm`.
-`securityos/securityops.defconfig` is reference-only and not consumed by the ISO build.*
+*Sources of truth: `securityops/kernel.scm`, `config.scm`, `securityops/sessions.scm`.
+`securityops/securityops.defconfig` is reference-only and not consumed by the ISO build.*

@@ -1,71 +1,100 @@
 # Download the Security Ops OS live ISO
 
-The live image is **~7.6 GiB**, larger than any git forge's single-file limit, so
-it is published as **4 split parts** (<2 GB each). Because Codeberg and the
-self-hosted Forgejo cap attachment size, the binary parts live on the
-**GitHub release**:
+The live image is **7.06 GiB** (`7,585,067,008` bytes), larger than the
+supported single-file release-asset limit, so it is published as **four split
+parts**. The binary parts live on the canonical GitHub release; Codeberg and
+the self-hosted Forgejo carry source and metadata-only mirrors to avoid
+duplicating multi-gigabyte data:
 
-👉 **https://github.com/cristiancmoises/securityops-os/releases/tag/v1.12.1**
+👉 **https://github.com/cristiancmoises/securityops-os/releases/tag/v1.13.0**
 
-(The full source, tag, and this guide are mirrored on GitHub, Codeberg, and
-git.securityops.co. Prefer not to download 7.6 GB? Build it reproducibly: `./build.sh`.)
+**Build:** `r11 · v1.13.0 · kernel 7.1.8-SecurityOps`
 
-**Build:** `r10 · v1.12.1 · wezterm · kernel 7.1.3`
-**Full ISO sha256:** `a8ebe5c6525da5f54dbd08ba60e3842a0d29a046f19db440afcacc3b6f20d19d`
-**Size:** `7656902656` bytes
+**Full ISO SHA-256:** `8f3b9f8717eda7ce7916bd20dd641e2f05516b5b4684d6f636b5bbf440849d99`
 
-> v1.12.1 is a point release over 1.12.0: it trims two `starship.toml` keys that
-> made the first shell print config warnings. WezTerm is the default terminal;
-> the guided installer works (`security-ops-install` or **Super+Shift+I**).
+**Exact size:** `7585067008` bytes
 
-## 1. Download all parts + the checksum manifest
+This release adds the one-command `securityopsctl` maintainer workflow and
+uses the authenticated Security Ops cache first, followed by
+`ci.guix.gnu.org`, with source fallback for cache misses.
 
-From the v1.12.1 release assets, grab:
+## 1. Download every release asset
 
-```
-securityos-live-20260709-190730.iso.part00
-securityos-live-20260709-190730.iso.part01
-securityos-live-20260709-190730.iso.part02
-securityos-live-20260709-190730.iso.part03
+Download these five files from the v1.13.0 GitHub release:
+
+```text
+securityops-live-20260810-235949-8f3b9f8717ed.iso.part00
+securityops-live-20260810-235949-8f3b9f8717ed.iso.part01
+securityops-live-20260810-235949-8f3b9f8717ed.iso.part02
+securityops-live-20260810-235949-8f3b9f8717ed.iso.part03
 SHA256SUMS.parts
 ```
 
-## 2. Verify the parts, then reassemble
+## 2. Verify and reassemble the ISO
+
+Run these commands in the directory containing all five files:
 
 ```sh
-sha256sum -c SHA256SUMS.parts          # all parts must say "OK"
+sha256sum -c SHA256SUMS.parts
 
-cat securityos-live-20260709-190730.iso.part?? > securityos-live-20260709-190730.iso
+cat securityops-live-20260810-235949-8f3b9f8717ed.iso.part?? \
+  > securityops-live-20260810-235949-8f3b9f8717ed.iso
 
-# confirm the reassembled ISO is byte-perfect:
-sha256sum securityos-live-20260709-190730.iso
-#   must print:
-#   a8ebe5c6525da5f54dbd08ba60e3842a0d29a046f19db440afcacc3b6f20d19d
+sha256sum securityops-live-20260810-235949-8f3b9f8717ed.iso
+# Must print:
+# 8f3b9f8717eda7ce7916bd20dd641e2f05516b5b4684d6f636b5bbf440849d99
 ```
 
-## 3. Write it to a USB stick
+Do not write the image to media unless all four part checks report `OK` and
+the reassembled ISO has the exact full-image hash above.
+
+## 3. Write it to a USB drive
+
+Replace `/dev/sdX` with the whole target drive, not a partition. This destroys
+everything on that drive, so verify it carefully with `lsblk` first.
 
 ```sh
-lsblk -o NAME,SIZE,MODEL,TRAN          # find the stick (e.g. /dev/sdX)
-sudo umount /dev/sdX* 2>/dev/null
-sudo dd if=securityos-live-20260709-190730.iso of=/dev/sdX bs=4M status=progress oflag=sync conv=fsync
+lsblk -o NAME,SIZE,MODEL,TRAN
+sudo umount /dev/sdX* 2>/dev/null || true
+sudo dd \
+  if=securityops-live-20260810-235949-8f3b9f8717ed.iso \
+  of=/dev/sdX bs=4M status=progress oflag=sync conv=fsync
 sync
-# Optional read-back verify:
-sudo head -c 7656902656 /dev/sdX | sha256sum   # must match the full sha256 above
+
+# Optional full read-back verification:
+sudo head -c 7585067008 /dev/sdX | sha256sum
+# Must match the full ISO SHA-256 above.
 ```
 
-Or drop the reassembled `.iso` into a **Ventoy** partition.
+The reassembled ISO can also be copied to a Ventoy partition.
 
-> Prefer to build it yourself (fully reproducible)? See the README — `./build.sh`.
+## Build it yourself
 
----
-*Per-part sha256 (also in `SHA256SUMS.parts`):*
+Clone the tagged source and run the professional maintainer tool. It validates
+the canonical OS settings, uses the pinned channel set and both ordered
+substitute servers, builds the image, verifies its checksum, and creates a
+transactional release bundle:
 
+```sh
+git clone --branch v1.13.0 --depth 1 \
+  https://github.com/cristiancmoises/securityops-os.git
+cd securityops-os
+./securityopsctl doctor
+./securityopsctl build --bundle
 ```
-dbf8dee6c7cb4e56f1f8f00af8b979a68b141884192b05cf53bcf5ccd6bc1795  ...part00
-0080796f589620db573c224024335862119808a4dda56d013294074a41b42b13  ...part01
-10fc7857dd91dc4629f191d79bd6d865f827947721484f411222c9e149fde82f  ...part02
-c570b64b278d077c621e301fbeb58d41519d4460da39a203eb147acb5822cb08  ...part03
+
+See the README and `./securityopsctl --help` for package, kernel, release, and
+resource-control commands.
+
+## Per-part SHA-256
+
+These values are also stored in `SHA256SUMS.parts`:
+
+```text
+5112e38992094fac0168c510c51465bf30b8d6ba02784596f8bd799baac4bdd4  securityops-live-20260810-235949-8f3b9f8717ed.iso.part00
+53f51aea162dcee6ff38012fa225d64960b72c9c5ac1e5dfda15b0dd95df000f  securityops-live-20260810-235949-8f3b9f8717ed.iso.part01
+33b79ee42d920659aba7880998b792c4a87bd3d6d2bb170d2719f669e238958a  securityops-live-20260810-235949-8f3b9f8717ed.iso.part02
+008697a11d59bb4d36d55376f048330a440662661692d26a2fda56db8e5682b1  securityops-live-20260810-235949-8f3b9f8717ed.iso.part03
 ```
 
 © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later

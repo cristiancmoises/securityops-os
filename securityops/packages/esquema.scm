@@ -2,7 +2,7 @@
 ;;;
 ;;; C sandbox primitives (user/mount/PID/UTS/IPC/net/cgroup namespaces,
 ;;; pivot_root, capability drop, seccomp-BPF allowlist, NO_NEW_PRIVS) exposed
-;;; to a Guile FFI + Scheme runtime.  Upstream: git.securityops.co/cristiancmoises/esquema
+;;; to a Guile FFI + Scheme runtime.  Upstream: git.securityops.com.br/cristiancmoises/esquema
 ;;;
 ;;; The in-tree source is vendored under esquema-src/ for a fully offline,
 ;;; reproducible build.  The Makefile has no install rule, so we install by
@@ -10,7 +10,7 @@
 ;;; export ESQUEMA_LIBDIR so the FFI resolves the .so from the profile.
 ;;;
 ;;; © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later
-(define-module (securityos packages esquema)
+(define-module (securityops packages esquema)
   #:use-module (guix packages)
   #:use-module (guix gexp)
   #:use-module (guix utils)                 ; cc-for-target
@@ -62,7 +62,7 @@ with mount, PID, UTS, IPC, network and cgroup namespaces, @code{pivot_root},
 full capability drop, a seccomp-BPF syscall allowlist and @code{NO_NEW_PRIVS}.
 The C primitives are exposed to a Guile FFI and a small Scheme runtime so
 containers can be declared and launched from Scheme.")
-    (home-page "https://git.securityops.co/cristiancmoises/esquema")
+    (home-page "https://git.securityops.com.br/cristiancmoises/esquema")
     (license license:agpl3+)))
 
 esquema

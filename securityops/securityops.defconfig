@@ -10,8 +10,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # READ THIS FIRST
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. This file is used ONLY by the custom `securityops` kernel package, which is
-#    COMMENTED OUT in config.scm. With nonguix `linux` (the default) it is ignored.
+# 1. This workstation-specific file is reference-only and is not consumed by
+#    the live-image build.  `linux-securityops` derives from Nonguix's broad,
+#    portable kernel config and applies the verified overlay in kernel.scm.
 # 2. Proprietary NVIDIA is an out-of-tree LOADABLE module:
 #       - CONFIG_MODULES MUST be =y  (the old AMD config had it =n -> impossible here)
 #       - kernel lockdown must NOT be force-enabled, and module-sig must NOT be
@@ -33,15 +34,14 @@
 # GAMING / FULL-HARDWARE additions (2026-06-08): NTSYNC (Proton), Intel thermal
 # stack for thermald, game-controller HID, CPU-freq governors, NO_HZ/PSI/THP
 # policy, DRM fbdev emulation. All KSPP/Clear/Xanmod hardening below is intact.
-# Reminder: this file is consumed ONLY by the custom `securityops` kernel, which
-# is disabled in config.scm. The system runs nonguix `linux` (required for the
-# prebuilt proprietary NVIDIA module). Use this kernel only with nouveau, or
-# after self-building the NVIDIA module against it (see notes 2-3 above).
+# Reminder: config.scm selects `linux-securityops`; this file remains only as an
+# audited Intel/NVIDIA workstation reference.  A kernel manually built from it
+# should use nouveau, or a NVIDIA module built against that exact kernel (see
+# notes 2-3 above).
 #
-# PERFORMANCE (2026-06-08): this kernel is DORMANT. The current desktop slowness
-# comes from the RUNNING nonguix `linux` + config.scm (cmdline + the CPU-pacing
-# service), NOT from this file. For parity with config.scm, init_on_free default
-# and NUMA balancing are turned OFF below.
+# PERFORMANCE (2026-06-08): the tuning below is reference-only and does not
+# affect the live kernel.  For parity with config.scm, init_on_free default and
+# NUMA balancing are turned OFF below.
 #
 
 # ─────────────────────────────── Architecture ───────────────────────────────

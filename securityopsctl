@@ -1,0 +1,1535 @@
+#!/usr/bin/env python3
+"""Safe maintainer CLI for Security Ops OS.
+
+The CLI owns only ``securityops/settings.json``.  It never rewrites the large
+hand-maintained Scheme configuration, never evaluates shell text, and never
+publishes Git tags or releases.  Guix consumes the settings through
+``(securityops settings)``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import difflib
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+
+TOOL_VERSION = "1.0.0"
+SCHEMA_VERSION = 1
+KERNEL_VERSION_RE = re.compile(
+    r"^[1-9][0-9]*\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+)
+RELEASE_VERSION_RE = KERNEL_VERSION_RE
+BUILD_REVISION_RE = re.compile(r"^r[1-9][0-9]*$")
+PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._-]{0,127}$")
+PACKAGE_SPEC_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9+._-]{0,127}"
+    r"(?:@[A-Za-z0-9][A-Za-z0-9+._-]{0,63})?"
+    r"(?::[A-Za-z0-9][A-Za-z0-9+._-]{0,63})?$"
+)
+NIX_BASE32_RE = re.compile(r"^[0-9abcdfghijklmnpqrsvwxyz]{52}$")
+HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+LOCK_HELD_ENV = "SECURITYOPS_ISO_LOCK_HELD"
+LOCK_FD_ENV = "SECURITYOPS_ISO_LOCK_FD"
+SUBSTITUTE_URLS = (
+    "https://substitutes.securityops.com.br https://ci.guix.gnu.org"
+)
+PRIVATE_CACHE_Q = "E1F0E3D0C9E78A62E21DA64CA81E0EA35215AA139449FE336DDDBAD47E35C48B"
+CI_CACHE_Q = "8D156F295D24B0D9A86FA5741A840FF2D24F60F7B6C4134814AD55625971B394"
+KEY_INTEGRITY = {
+    "substitutes.securityops.com.br.pub": (
+        "5db8721d97525215c3497e999c537ee8aaca56f9ee0f4b03e7ad1f0d028040f8",
+        PRIVATE_CACHE_Q,
+    ),
+    "ci.guix.gnu.org.pub": (
+        "0f7e51614eac75353196b650e73b7b5eeee59824b0f78935da0d6717ddd1792f",
+        CI_CACHE_Q,
+    ),
+}
+
+
+class MaintainerError(Exception):
+    """Expected operator-facing failure."""
+
+
+class ValidationError(MaintainerError):
+    """Settings or input failed validation."""
+
+
+class BuildBusyError(MaintainerError):
+    """The ISO build lock is already held."""
+
+
+@dataclass(frozen=True)
+class Repository:
+    root: Path
+
+    @property
+    def settings_path(self) -> Path:
+        return self.root / "securityops" / "settings.json"
+
+    @property
+    def settings_module_path(self) -> Path:
+        return self.root / "securityops" / "settings.scm"
+
+    @property
+    def out_dir(self) -> Path:
+        return self.root / "out"
+
+    @property
+    def lock_path(self) -> Path:
+        return self.out_dir / ".iso-build.lock"
+
+    @property
+    def build_script(self) -> Path:
+        return self.root / "make-iso.sh"
+
+    @property
+    def channels_path(self) -> Path:
+        return self.root / "channels.scm"
+
+
+REPOSITORY = Repository(Path(__file__).resolve().parent)
+
+
+def _reject_duplicate_json_keys(pairs: Sequence[Tuple[str, Any]]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValidationError("settings JSON contains duplicate key: {!r}".format(key))
+        result[key] = value
+    return result
+
+
+def _expect_object(value: Any, context: str, keys: Iterable[str]) -> Mapping[str, Any]:
+    if type(value) is not dict:
+        raise ValidationError("{} must be a JSON object".format(context))
+    expected = set(keys)
+    actual = set(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        details: List[str] = []
+        if missing:
+            details.append("missing {}".format(", ".join(missing)))
+        if extra:
+            details.append("unknown {}".format(", ".join(extra)))
+        raise ValidationError("{} has invalid keys ({})".format(context, "; ".join(details)))
+    return value
+
+
+def _expect_string(value: Any, context: str, maximum: int = 256) -> str:
+    if not isinstance(value, str) or not value or len(value) > maximum:
+        raise ValidationError("{} must be a non-empty string of at most {} characters".format(
+            context, maximum
+        ))
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValidationError("{} contains a control character".format(context))
+    return value
+
+
+def kernel_url(version: str) -> str:
+    """Return the only kernel source URL accepted by this tool."""
+    validate_kernel_version(version)
+    major = version.split(".", 1)[0]
+    return "https://cdn.kernel.org/pub/linux/kernel/v{}.x/linux-{}.tar.xz".format(
+        major, version
+    )
+
+
+def validate_kernel_version(version: str) -> None:
+    if not isinstance(version, str) or not KERNEL_VERSION_RE.fullmatch(version):
+        raise ValidationError("kernel version must be a stable canonical X.Y.Z version")
+
+
+def validate_package_name(package: str) -> None:
+    if not isinstance(package, str) or not PACKAGE_RE.fullmatch(package):
+        raise ValidationError(
+            "invalid package name {!r}; use a Guix package name containing only "
+            "letters, digits, '+', '-', '.', or '_'".format(package)
+        )
+
+
+def package_spec_base(specification: str) -> str:
+    """Return PACKAGE from PACKAGE, PACKAGE@VERSION, or PACKAGE:OUTPUT."""
+    if not isinstance(specification, str):
+        raise ValidationError("package specification must be a string")
+    boundaries = [
+        position
+        for position in (specification.find("@"), specification.find(":"))
+        if position >= 0
+    ]
+    return specification[: min(boundaries)] if boundaries else specification
+
+
+def package_spec_output(specification: str) -> str:
+    """Return OUTPUT from a Guix specification, defaulting to ``out``."""
+    return specification.split(":", 1)[1] if ":" in specification else "out"
+
+
+def package_spec_key(specification: str) -> Tuple[str, str]:
+    return package_spec_base(specification), package_spec_output(specification)
+
+
+def validate_package_specification(specification: str) -> None:
+    if not isinstance(specification, str) or not PACKAGE_SPEC_RE.fullmatch(specification):
+        raise ValidationError(
+            "invalid package specification {!r}; use PACKAGE, PACKAGE@VERSION, "
+            "PACKAGE:OUTPUT, or PACKAGE@VERSION:OUTPUT".format(specification)
+        )
+    validate_package_name(package_spec_base(specification))
+
+
+def nix_base32_sha256(hexadecimal: str) -> str:
+    """Encode a hexadecimal SHA-256 using Guix/Nix's base32 bit ordering."""
+    if not isinstance(hexadecimal, str) or not HEX_SHA256_RE.fullmatch(hexadecimal):
+        raise ValidationError("cannot encode an invalid hexadecimal SHA-256")
+    digest = bytes.fromhex(hexadecimal)
+    alphabet = "0123456789abcdfghijklmnpqrsvwxyz"
+    encoded: List[str] = []
+    character_count = (len(digest) * 8 + 4) // 5
+    for position in range(character_count - 1, -1, -1):
+        bit = position * 5
+        byte_index, shift = divmod(bit, 8)
+        value = digest[byte_index] >> shift
+        if byte_index + 1 < len(digest):
+            value |= digest[byte_index + 1] << (8 - shift)
+        encoded.append(alphabet[value & 0x1F])
+    return "".join(encoded)
+
+
+def _validate_package_list(value: Any, context: str, specifications: bool) -> List[str]:
+    if type(value) is not list:
+        raise ValidationError("{} must be a JSON array".format(context))
+    for package in value:
+        if specifications:
+            validate_package_specification(package)
+        else:
+            validate_package_name(package)
+    if len(value) != len(set(value)):
+        raise ValidationError("{} contains a duplicate package".format(context))
+    if value != sorted(value):
+        raise ValidationError("{} must be sorted".format(context))
+    if specifications:
+        keys = [package_spec_key(package) for package in value]
+        if len(keys) != len(set(keys)):
+            raise ValidationError(
+                "{} contains multiple specifications for one package output".format(context)
+            )
+    return value
+
+
+def validate_settings(data: Any) -> Mapping[str, Any]:
+    """Validate the complete settings schema and return *data* unchanged."""
+    root = _expect_object(data, "root", ("schema", "release", "kernel", "packages"))
+    if type(root["schema"]) is not int or root["schema"] != SCHEMA_VERSION:
+        raise ValidationError("schema must be the integer {}".format(SCHEMA_VERSION))
+
+    release = _expect_object(
+        root["release"],
+        "release",
+        ("version", "build_revision", "desktop_label"),
+    )
+    release_version = _expect_string(release["version"], "release.version", 64)
+    if not RELEASE_VERSION_RE.fullmatch(release_version):
+        raise ValidationError("release.version must be a stable canonical X.Y.Z version")
+    build_revision = _expect_string(
+        release["build_revision"], "release.build_revision", 32
+    )
+    if not BUILD_REVISION_RE.fullmatch(build_revision):
+        raise ValidationError("release.build_revision must look like r11")
+    _expect_string(release["desktop_label"], "release.desktop_label", 64)
+
+    kernel = _expect_object(
+        root["kernel"], "kernel", ("version", "url", "nix_base32", "sha256")
+    )
+    version = _expect_string(kernel["version"], "kernel.version", 64)
+    validate_kernel_version(version)
+    url = _expect_string(kernel["url"], "kernel.url", 512)
+    expected_url = kernel_url(version)
+    if url != expected_url:
+        raise ValidationError("kernel.url must be {!r}".format(expected_url))
+    nix_hash = _expect_string(kernel["nix_base32"], "kernel.nix_base32", 52)
+    if not NIX_BASE32_RE.fullmatch(nix_hash):
+        raise ValidationError("kernel.nix_base32 is not a SHA-256 Nix-base32 hash")
+    hex_hash = _expect_string(kernel["sha256"], "kernel.sha256", 64)
+    if not HEX_SHA256_RE.fullmatch(hex_hash):
+        raise ValidationError("kernel.sha256 is not a lowercase hexadecimal SHA-256")
+    if nix_base32_sha256(hex_hash) != nix_hash:
+        raise ValidationError("kernel.nix_base32 and kernel.sha256 describe different bytes")
+
+    packages = _expect_object(root["packages"], "packages", ("add", "remove"))
+    additions = _validate_package_list(packages["add"], "packages.add", True)
+    removals = _validate_package_list(packages["remove"], "packages.remove", False)
+    overlap = sorted({package_spec_base(package) for package in additions} & set(removals))
+    if overlap:
+        raise ValidationError(
+            "packages.add and packages.remove overlap: {}".format(", ".join(overlap))
+        )
+    return root
+
+
+def canonical_settings(data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return a deterministic, independently owned representation."""
+    validate_settings(data)
+    release = data["release"]
+    kernel = data["kernel"]
+    packages = data["packages"]
+    result: Dict[str, Any] = {
+        "schema": SCHEMA_VERSION,
+        "release": {
+            "version": release["version"],
+            "build_revision": release["build_revision"],
+            "desktop_label": release["desktop_label"],
+        },
+        "kernel": {
+            "version": kernel["version"],
+            "url": kernel["url"],
+            "nix_base32": kernel["nix_base32"],
+            "sha256": kernel["sha256"],
+        },
+        "packages": {
+            "add": sorted(packages["add"]),
+            "remove": sorted(packages["remove"]),
+        },
+    }
+    validate_settings(result)
+    return result
+
+
+def serialize_settings(data: Mapping[str, Any]) -> str:
+    return json.dumps(canonical_settings(data), indent=2, ensure_ascii=False) + "\n"
+
+
+def _open_regular_nofollow(path: Path) -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(str(path), flags)
+    except FileNotFoundError as error:
+        raise MaintainerError("required file does not exist: {}".format(path)) from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise MaintainerError("refusing symbolic link: {}".format(path)) from error
+        raise MaintainerError("cannot open {}: {}".format(path, error)) from error
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise MaintainerError("required path is not a regular file: {}".format(path))
+    return descriptor
+
+
+def load_settings(path: Path) -> Dict[str, Any]:
+    descriptor = _open_regular_nofollow(path)
+    try:
+        metadata = os.fstat(descriptor)
+        if metadata.st_size > 1024 * 1024:
+            raise ValidationError("settings file is unexpectedly larger than 1 MiB")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as settings_file:
+            descriptor = -1
+            try:
+                data = json.load(settings_file, object_pairs_hook=_reject_duplicate_json_keys)
+            except json.JSONDecodeError as error:
+                raise ValidationError(
+                    "invalid settings JSON at line {}, column {}: {}".format(
+                        error.lineno, error.colno, error.msg
+                    )
+                ) from error
+            except UnicodeDecodeError as error:
+                raise ValidationError("settings JSON is not valid UTF-8") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    validate_settings(data)
+    return canonical_settings(data)
+
+
+def atomic_write_settings(path: Path, data: Mapping[str, Any]) -> None:
+    """Write validated JSON without exposing a partial destination file."""
+    payload = serialize_settings(data).encode("utf-8")
+    parent = path.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise MaintainerError("settings parent must be a real directory: {}".format(parent))
+    try:
+        destination = path.lstat()
+    except FileNotFoundError:
+        destination = None
+    if destination is not None and stat.S_ISLNK(destination.st_mode):
+        raise MaintainerError("refusing symbolic link: {}".format(path))
+    if destination is not None and not stat.S_ISREG(destination.st_mode):
+        raise MaintainerError("settings destination is not a regular file: {}".format(path))
+    mode = stat.S_IMODE(destination.st_mode) if destination is not None else 0o644
+
+    descriptor = -1
+    temporary_name: Optional[str] = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".settings.json.", suffix=".tmp", dir=str(parent)
+        )
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as temporary_file:
+            descriptor = -1
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        if path.is_symlink():
+            raise MaintainerError("refusing symbolic link created at destination: {}".format(path))
+        os.replace(temporary_name, str(path))
+        temporary_name = None
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        directory_descriptor = os.open(str(parent), directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+
+
+class BuildLock:
+    """Non-blocking exclusive lock shared with build.sh and make-iso.sh."""
+
+    def __init__(self, repository: Repository):
+        self.repository = repository
+        self.descriptor: Optional[int] = None
+
+    def __enter__(self) -> "BuildLock":
+        out_dir = self.repository.out_dir
+        if out_dir.is_symlink():
+            raise MaintainerError("refusing symbolic-link output directory: {}".format(out_dir))
+        if out_dir.exists() and not out_dir.is_dir():
+            raise MaintainerError("output path is not a directory: {}".format(out_dir))
+        out_dir.mkdir(mode=0o755, parents=False, exist_ok=True)
+
+        flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(str(self.repository.lock_path), flags, 0o600)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise MaintainerError(
+                    "refusing symbolic-link build lock: {}".format(
+                        self.repository.lock_path
+                    )
+                ) from error
+            raise MaintainerError("cannot open build lock: {}".format(error)) from error
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise MaintainerError("build lock is not a regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            os.close(descriptor)
+            raise BuildBusyError(
+                "an ISO build is active; settings were not changed"
+            ) from error
+        self.descriptor = descriptor
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        if self.descriptor is not None:
+            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+            os.close(self.descriptor)
+            self.descriptor = None
+
+
+def _settings_diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> str:
+    return "".join(
+        difflib.unified_diff(
+            serialize_settings(before).splitlines(keepends=True),
+            serialize_settings(after).splitlines(keepends=True),
+            fromfile="securityops/settings.json (current)",
+            tofile="securityops/settings.json (proposed)",
+        )
+    )
+
+
+def _mutate_settings_locked(
+    repository: Repository,
+    transform: Callable[[Dict[str, Any]], None],
+    dry_run: bool,
+) -> Tuple[bool, Dict[str, Any]]:
+    before = load_settings(repository.settings_path)
+    after = copy.deepcopy(before)
+    transform(after)
+    after = canonical_settings(after)
+    changed = serialize_settings(before) != serialize_settings(after)
+    if not changed:
+        print("Settings already match the request; nothing to change.")
+        return False, after
+    difference = _settings_diff(before, after)
+    if dry_run:
+        print(difference, end="")
+        print("Dry run: settings were not written.")
+    else:
+        atomic_write_settings(repository.settings_path, after)
+        print(difference, end="")
+        print("Updated {} atomically.".format(repository.settings_path))
+    return True, after
+
+
+def mutate_settings(
+    repository: Repository,
+    transform: Callable[[Dict[str, Any]], None],
+    dry_run: bool = False,
+) -> Tuple[bool, Dict[str, Any]]:
+    with BuildLock(repository):
+        return _mutate_settings_locked(repository, transform, dry_run)
+
+
+def update_package_overrides(
+    data: Dict[str, Any],
+    additions: Sequence[str] = (),
+    removals: Sequence[str] = (),
+    resets: Sequence[str] = (),
+) -> None:
+    for package in additions:
+        validate_package_specification(package)
+    for package in list(removals) + list(resets):
+        validate_package_name(package)
+    addition_keys = [package_spec_key(package) for package in additions]
+    if len(addition_keys) != len(set(addition_keys)):
+        raise ValidationError("only one added specification is allowed per package output")
+    addition_bases = [base for base, _output in addition_keys]
+    add_request = set(additions)
+    add_request_bases = set(addition_bases)
+    remove_request = set(removals)
+    reset_request = set(resets)
+    conflicts = (add_request_bases & remove_request) | (add_request_bases & reset_request) | (
+        remove_request & reset_request
+    )
+    if conflicts:
+        raise ValidationError(
+            "the same package cannot have multiple actions: {}".format(
+                ", ".join(sorted(conflicts))
+            )
+        )
+
+    current_add = set(data["packages"]["add"])
+    current_remove = set(data["packages"]["remove"])
+    for package in reset_request:
+        current_add = {
+            specification
+            for specification in current_add
+            if package_spec_base(specification) != package
+        }
+        current_remove.discard(package)
+    for package in remove_request:
+        current_add = {
+            specification
+            for specification in current_add
+            if package_spec_base(specification) != package
+        }
+        current_remove.add(package)
+    for specification in add_request:
+        base = package_spec_base(specification)
+        key = package_spec_key(specification)
+        current_remove.discard(base)
+        current_add = {
+            existing
+            for existing in current_add
+            if package_spec_key(existing) != key
+        }
+        current_add.add(specification)
+    data["packages"]["add"] = sorted(current_add)
+    data["packages"]["remove"] = sorted(current_remove)
+
+
+def _sha256_file(path: Path) -> str:
+    descriptor = _open_regular_nofollow(path)
+    digest = hashlib.sha256()
+    try:
+        with os.fdopen(descriptor, "rb") as source:
+            descriptor = -1
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return digest.hexdigest()
+
+
+def fetch_kernel_metadata(
+    version: str,
+    repository: Repository,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> Dict[str, str]:
+    """Download an official kernel origin and calculate both required hashes."""
+    url = kernel_url(version)
+    guix = shutil.which("guix")
+    if not guix:
+        raise MaintainerError("guix is required to resolve a kernel source hash")
+    command = [guix, "download", "--format=nix-base32", url]
+    print("Downloading and hashing official Linux {} source...".format(version), flush=True)
+    completed = runner(
+        command,
+        cwd=str(repository.root),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise MaintainerError(
+            "guix download failed for Linux {} (exit {})".format(
+                version, completed.returncode
+            )
+        )
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    hashes = [line for line in lines if NIX_BASE32_RE.fullmatch(line)]
+    paths = [Path(line) for line in lines if line.startswith("/")]
+    if len(hashes) != 1 or len(paths) != 1:
+        raise MaintainerError("could not parse the path and Nix-base32 hash from guix download")
+    source = paths[0]
+    if not source.name.endswith("-linux-{}.tar.xz".format(version)):
+        raise MaintainerError("guix returned an unexpected kernel source path: {}".format(source))
+    local_sha256 = _sha256_file(source)
+    if not HEX_SHA256_RE.fullmatch(local_sha256):
+        raise MaintainerError("local kernel SHA-256 calculation returned an invalid value")
+    local_nix_base32 = nix_base32_sha256(local_sha256)
+    if local_nix_base32 != hashes[0]:
+        raise MaintainerError(
+            "guix download hash does not match the locally hashed kernel source"
+        )
+    return {
+        "version": version,
+        "url": url,
+        "nix_base32": hashes[0],
+        "sha256": local_sha256,
+    }
+
+
+def set_kernel(data: Dict[str, Any], metadata: Mapping[str, str]) -> None:
+    candidate = {
+        "version": metadata["version"],
+        "url": metadata["url"],
+        "nix_base32": metadata["nix_base32"],
+        "sha256": metadata["sha256"],
+    }
+    temporary = copy.deepcopy(data)
+    temporary["kernel"] = candidate
+    validate_settings(temporary)
+    data["kernel"] = candidate
+
+
+def set_release(
+    data: Dict[str, Any],
+    version: str,
+    revision: str,
+    desktop_label: Optional[str] = None,
+) -> None:
+    if not isinstance(version, str) or not RELEASE_VERSION_RE.fullmatch(version):
+        raise ValidationError("release version must be a stable canonical X.Y.Z version")
+    if not isinstance(revision, str) or not BUILD_REVISION_RE.fullmatch(revision):
+        raise ValidationError("release revision must look like r11")
+    if desktop_label is not None:
+        _expect_string(desktop_label, "release.desktop_label", 64)
+    candidate = copy.deepcopy(data["release"])
+    candidate["version"] = version
+    candidate["build_revision"] = revision
+    if desktop_label is not None:
+        candidate["desktop_label"] = desktop_label
+    temporary = copy.deepcopy(data)
+    temporary["release"] = candidate
+    validate_settings(temporary)
+    data["release"] = candidate
+
+
+def positive_integer(value: str) -> int:
+    try:
+        parsed = int(value, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def build_invocation(
+    repository: Repository,
+    bundle: bool = False,
+    prune_old: bool = False,
+    jobs: Optional[int] = None,
+    cores: Optional[int] = None,
+) -> List[str]:
+    command = [str(repository.build_script)]
+    if bundle:
+        command.append("--bundle")
+    if prune_old:
+        command.append("--prune-old")
+    if jobs is not None:
+        if jobs < 1:
+            raise ValidationError("jobs must be a positive integer")
+        command.extend(("--jobs", str(jobs)))
+    if cores is not None:
+        if cores < 1:
+            raise ValidationError("cores must be a positive integer")
+        command.extend(("--cores", str(cores)))
+    return command
+
+
+def _builder_has_lock_handoff(repository: Repository) -> bool:
+    try:
+        build_text = repository.build_script.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+    return LOCK_HELD_ENV in build_text and LOCK_FD_ENV in build_text
+
+
+def run_build(
+    repository: Repository,
+    bundle: bool = False,
+    prune_old: bool = False,
+    jobs: Optional[int] = None,
+    cores: Optional[int] = None,
+    dry_run: bool = False,
+    held_lock: Optional[BuildLock] = None,
+    runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> int:
+    load_settings(repository.settings_path)
+    script = repository.build_script
+    descriptor = _open_regular_nofollow(script)
+    metadata = os.fstat(descriptor)
+    os.close(descriptor)
+    if not metadata.st_mode & stat.S_IXUSR:
+        raise MaintainerError("build script is not executable: {}".format(script))
+    command = build_invocation(
+        repository, bundle=bundle, prune_old=prune_old, jobs=jobs, cores=cores
+    )
+    print("Build command: {}".format(shlex.join(command)))
+    if dry_run:
+        print("Dry run: the ISO build was not started.")
+        return 0
+    environment = os.environ.copy()
+    run_arguments: Dict[str, Any] = {
+        "cwd": str(repository.root),
+        "env": environment,
+        "check": False,
+    }
+    if held_lock is not None:
+        if held_lock.repository != repository or held_lock.descriptor is None:
+            raise MaintainerError("cannot hand off an invalid build lock")
+        if not _builder_has_lock_handoff(repository):
+            raise MaintainerError(
+                "make-iso.sh does not support the inherited-lock protocol; "
+                "the build was not started"
+            )
+        environment[LOCK_HELD_ENV] = "1"
+        environment[LOCK_FD_ENV] = str(held_lock.descriptor)
+        run_arguments["pass_fds"] = (held_lock.descriptor,)
+    completed = runner(command, **run_arguments)
+    return completed.returncode
+
+
+def probe_build_lock(repository: Repository) -> str:
+    lock_path = repository.lock_path
+    if not lock_path.exists() and not lock_path.is_symlink():
+        return "idle"
+    if lock_path.is_symlink():
+        return "unsafe (lock is a symbolic link)"
+    try:
+        descriptor = _open_regular_nofollow(lock_path)
+    except MaintainerError as error:
+        return "unknown ({})".format(error)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "active"
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            return "idle"
+    finally:
+        os.close(descriptor)
+
+
+def human_bytes(size: int) -> str:
+    value = float(size)
+    for suffix in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0 or suffix == "TiB":
+            return "{:.1f} {}".format(value, suffix)
+        value /= 1024.0
+    return "{} B".format(size)
+
+
+def latest_iso(repository: Repository) -> Optional[Path]:
+    if not repository.out_dir.is_dir() or repository.out_dir.is_symlink():
+        return None
+    candidates = [
+        path
+        for path in repository.out_dir.glob("securityops-live-*.iso")
+        if path.is_file() and not path.is_symlink()
+    ]
+    return max(candidates, key=lambda path: path.stat().st_mtime_ns) if candidates else None
+
+
+def show_status(repository: Repository) -> int:
+    settings = load_settings(repository.settings_path)
+    print("Security Ops OS maintainer status")
+    print("  release: {} ({}, {})".format(
+        settings["release"]["version"],
+        settings["release"]["build_revision"],
+        settings["release"]["desktop_label"],
+    ))
+    print("  kernel: Linux {}".format(settings["kernel"]["version"]))
+    print("  package overrides: +{} / -{}".format(
+        len(settings["packages"]["add"]), len(settings["packages"]["remove"])
+    ))
+    print("  ISO build: {}".format(probe_build_lock(repository)))
+    disk_target = repository.out_dir if repository.out_dir.exists() else repository.root
+    usage = shutil.disk_usage(disk_target)
+    print("  disk free: {}".format(human_bytes(usage.free)))
+    image = latest_iso(repository)
+    if image is None:
+        print("  latest ISO: none")
+    else:
+        sidecar = Path(str(image) + ".sha256")
+        print("  latest ISO: {} ({})".format(image, human_bytes(image.stat().st_size)))
+        print("  checksum sidecar: {}".format("present" if sidecar.is_file() else "missing"))
+    return 0
+
+
+def _integration_state(repository: Repository) -> List[str]:
+    warnings: List[str] = []
+    checks = (
+        (repository.root / "config.scm", "(securityops settings)", "config.scm"),
+        (repository.root / "securityops" / "kernel.scm", "(securityops settings)", "kernel.scm"),
+        (repository.root / "securityops" / "sessions.scm", "(securityops settings)", "sessions.scm"),
+        (
+            repository.root / "securityops" / "installer" / "gen-config.sh",
+            "(securityops settings)",
+            "installer config generator",
+        ),
+    )
+    for path, marker, label in checks:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            warnings.append("cannot inspect {} integration".format(label))
+            continue
+        if marker not in text:
+            warnings.append("{} does not yet import (securityops settings)".format(label))
+    if not _builder_has_lock_handoff(repository):
+        warnings.append(
+            "make-iso.sh does not yet consume {} and {} for atomic "
+            "mutation-to-build handoff".format(
+                LOCK_HELD_ENV, LOCK_FD_ENV
+            )
+        )
+    return warnings
+
+
+def doctor(repository: Repository) -> int:
+    errors: List[str] = []
+    warnings: List[str] = []
+    try:
+        settings = load_settings(repository.settings_path)
+        print("ok: settings schema {} ({})".format(
+            settings["schema"], repository.settings_path
+        ))
+    except MaintainerError as error:
+        errors.append(str(error))
+
+    required_commands = (
+        "python3", "bash", "guile", "guix", "git", "flock", "openssl",
+        "sed", "readlink", "sha256sum", "split", "cmp", "find",
+    )
+    for command in required_commands:
+        location = shutil.which(command)
+        if location:
+            print("ok: {} -> {}".format(command, location))
+        else:
+            errors.append("required command not found: {}".format(command))
+
+    required_files = (
+        repository.settings_module_path,
+        repository.build_script,
+        repository.channels_path,
+        repository.root / "substitutes.securityops.com.br.pub",
+        repository.root / "ci.guix.gnu.org.pub",
+    )
+    for path in required_files:
+        if path.is_file() and not path.is_symlink():
+            print("ok: {}".format(path.relative_to(repository.root)))
+        else:
+            errors.append("missing or unsafe required file: {}".format(path))
+
+    for relative_name, (expected_hash, expected_q) in KEY_INTEGRITY.items():
+        key_path = repository.root / relative_name
+        if not key_path.is_file() or key_path.is_symlink():
+            continue
+        try:
+            actual_hash = _sha256_file(key_path)
+            key_text = key_path.read_text(encoding="utf-8").upper()
+        except (MaintainerError, OSError, UnicodeError) as error:
+            errors.append("could not verify {}: {}".format(relative_name, error))
+            continue
+        if actual_hash != expected_hash:
+            errors.append(
+                "{} SHA-256 mismatch (expected {}, got {})".format(
+                    relative_name, expected_hash, actual_hash
+                )
+            )
+        elif expected_q not in key_text:
+            errors.append("{} does not contain the expected Ed25519 q value".format(relative_name))
+        else:
+            print("ok: {} integrity {}".format(relative_name, actual_hash))
+
+    host_acl = Path("/etc/guix/acl")
+    try:
+        acl_text = host_acl.read_text(encoding="utf-8").upper()
+    except (OSError, UnicodeError) as error:
+        warnings.append("cannot inspect host Guix ACL {}: {}".format(host_acl, error))
+    else:
+        if CI_CACHE_Q in acl_text:
+            print("ok: host Guix ACL trusts ci.guix.gnu.org ({})".format(CI_CACHE_Q))
+        else:
+            warnings.append(
+                "host Guix ACL does not contain ci.guix.gnu.org q #{}#".format(CI_CACHE_Q)
+            )
+        if PRIVATE_CACHE_Q in acl_text:
+            print("ok: host Guix ACL trusts substitutes.securityops.com.br ({})".format(
+                PRIVATE_CACHE_Q
+            ))
+        else:
+            warnings.append(
+                "host Guix ACL is missing private cache q #{}#; authorize "
+                "it for private-cache hits with: sudo guix archive --authorize < "
+                "substitutes.securityops.com.br.pub".format(
+                    PRIVATE_CACHE_Q
+                )
+            )
+
+    try:
+        free = shutil.disk_usage(repository.root).free
+        print("ok: disk free {}".format(human_bytes(free)))
+        if free < 24 * 1024**3:
+            warnings.append("less than 24 GiB is free; an ISO plus release bundle may not fit")
+    except OSError as error:
+        warnings.append("could not determine free disk space: {}".format(error))
+
+    warnings.extend(_integration_state(repository))
+    for warning in warnings:
+        print("warning: {}".format(warning), file=sys.stderr)
+    for error in errors:
+        print("error: {}".format(error), file=sys.stderr)
+    if errors:
+        print("Doctor found {} error(s) and {} warning(s).".format(
+            len(errors), len(warnings)
+        ))
+        return 1
+    print("Doctor passed with {} warning(s).".format(len(warnings)))
+    return 0
+
+
+def generate_installer_validation_config(
+    repository: Repository,
+    output_directory: Path,
+    runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> Path:
+    generator = repository.root / "securityops" / "installer" / "gen-config.sh"
+    descriptor = _open_regular_nofollow(generator)
+    os.close(descriptor)
+    bash = shutil.which("bash")
+    if not bash:
+        raise MaintainerError("bash is required to validate the installer template")
+    output = output_directory / "installer-config.scm"
+    command = [
+        bash,
+        str(generator),
+        "--out",
+        str(output),
+        "--host",
+        "securityops-validation",
+        "--user",
+        "validator",
+        "--fullname",
+        "Validation User",
+        "--locale",
+        "en_US.UTF-8",
+        "--tz",
+        "Etc/UTC",
+        "--keymap",
+        "us",
+        "--xkbvariant",
+        "",
+        "--fs",
+        "ext4",
+        "--encrypt",
+        "no",
+        "--root-uuid",
+        "11111111-2222-3333-4444-555555555555",
+        "--efi-uuid",
+        "ABCD-1234",
+        "--desktop",
+        "sway",
+    ]
+    environment = os.environ.copy()
+    environment["SO_UPASS"] = "validation-user-password"
+    environment["SO_RPASS"] = "validation-root-password"
+    completed = runner(
+        command,
+        cwd=str(repository.root),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        details = completed.stderr.strip().splitlines()
+        suffix = ": {}".format(details[-1]) if details else ""
+        raise ValidationError("installer config generation failed{}".format(suffix))
+    if not output.is_file() or output.is_symlink():
+        raise ValidationError("installer config generator did not create a safe output file")
+
+    generated = output.read_text(encoding="utf-8")
+    if "(local-file %pinned-channels-source)" not in generated:
+        raise ValidationError("generated installer config has an unexpected channel reference")
+    return output
+
+
+def full_validation_commands(
+    repository: Repository,
+    guix: str,
+    installer_config: Optional[Path] = None,
+) -> List[List[str]]:
+    outer = [
+        guix,
+        "time-machine",
+        "-C",
+        str(repository.channels_path),
+        "--substitute-urls={}".format(SUBSTITUTE_URLS),
+        "--fallback",
+        "--",
+    ]
+    inner_common = [
+        "--dry-run",
+        "-L",
+        str(repository.root),
+        "--substitute-urls={}".format(SUBSTITUTE_URLS),
+        "--fallback",
+    ]
+    kernel_command = outer + [
+        "build",
+        *inner_common,
+        "-e",
+        "(@ (securityops kernel) linux-securityops)",
+    ]
+    image_command = outer + [
+        "system",
+        "image",
+        *inner_common,
+        "-t",
+        "iso9660",
+        "--label=SECURITY_OPS_LIVE",
+        str(repository.root / "config.scm"),
+    ]
+    commands = [kernel_command, image_command]
+    if installer_config is not None:
+        commands.append(outer + ["system", "build", *inner_common, str(installer_config)])
+    return commands
+
+
+def validate_repository(repository: Repository, full: bool = False) -> int:
+    settings = load_settings(repository.settings_path)
+    module_descriptor = _open_regular_nofollow(repository.settings_module_path)
+    try:
+        if os.fstat(module_descriptor).st_size > 1024 * 1024:
+            raise ValidationError("settings.scm is unexpectedly larger than 1 MiB")
+        try:
+            module_text = os.read(module_descriptor, 1024 * 1024).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValidationError("settings.scm is not valid UTF-8") from error
+    finally:
+        os.close(module_descriptor)
+    exports = (
+        "%release-version", "%build-revision", "%desktop-label",
+        "%kernel-version", "%kernel-url", "%kernel-nix-base32",
+        "%kernel-sha256", "%package-additions", "%package-removals",
+    )
+    missing_exports = [name for name in exports if name not in module_text]
+    if missing_exports:
+        raise ValidationError(
+            "settings.scm is missing exports: {}".format(", ".join(missing_exports))
+        )
+
+    guile = shutil.which("guile")
+    if not guile:
+        raise MaintainerError("guile is required to validate the settings adapter")
+    expression = (
+        "(use-modules (securityops settings)) "
+        "(unless (string=? %kernel-version \"{}\") (exit 1))"
+    ).format(settings["kernel"]["version"])
+    environment = os.environ.copy()
+    environment["GUILE_AUTO_COMPILE"] = "0"
+    command = [guile, "-L", str(repository.root), "-c", expression]
+    completed = subprocess.run(
+        command,
+        cwd=str(repository.root),
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        details = completed.stderr.strip().splitlines()
+        suffix = ": {}".format(details[-1]) if details else ""
+        raise ValidationError("Guile settings adapter validation failed{}".format(suffix))
+
+    if full:
+        guix = shutil.which("guix")
+        if not guix:
+            raise MaintainerError("guix is required for --full validation")
+        with BuildLock(repository):
+            missing_integration = [
+                warning
+                for warning in _integration_state(repository)
+                if "does not yet import (securityops settings)" in warning
+            ]
+            if missing_integration:
+                raise ValidationError("; ".join(missing_integration))
+            with tempfile.TemporaryDirectory(prefix="securityops-validate-") as temporary:
+                installer_config = generate_installer_validation_config(
+                    repository, Path(temporary)
+                )
+                descriptions = (
+                    "pinned kernel dry-run",
+                    "pinned system-image dry-run",
+                    "pinned generated-installer dry-run",
+                )
+                for description, full_command in zip(
+                    descriptions,
+                    full_validation_commands(repository, guix, installer_config),
+                ):
+                    print(">> {}".format(description), flush=True)
+                    completed = subprocess.run(
+                        full_command,
+                        cwd=str(repository.root),
+                        check=False,
+                    )
+                    if completed.returncode != 0:
+                        raise ValidationError(
+                            "{} failed with exit {}".format(
+                                description, completed.returncode
+                            )
+                        )
+
+    print("Validated schema, versions, official kernel URL, hashes, package overrides,")
+    print("and the Guile settings adapter{}.".format(
+        " plus pinned kernel/image/installer dry-runs" if full else ""
+    ))
+    for warning in _integration_state(repository):
+        print("warning: {}".format(warning), file=sys.stderr)
+    return 0
+
+
+def show_package_changes(repository: Repository) -> int:
+    settings = load_settings(repository.settings_path)
+    additions = settings["packages"]["add"]
+    removals = settings["packages"]["remove"]
+    print("Package additions ({}):".format(len(additions)))
+    for package in additions:
+        print("  + {}".format(package))
+    if not additions:
+        print("  (none)")
+    print("Package removals ({}):".format(len(removals)))
+    for package in removals:
+        print("  - {}".format(package))
+    if not removals:
+        print("  (none)")
+    return 0
+
+
+def show_kernel(repository: Repository) -> int:
+    kernel = load_settings(repository.settings_path)["kernel"]
+    print("Linux {}".format(kernel["version"]))
+    print("  URL:          {}".format(kernel["url"]))
+    print("  Nix base32:   {}".format(kernel["nix_base32"]))
+    print("  SHA-256:      {}".format(kernel["sha256"]))
+    return 0
+
+
+def show_release(repository: Repository) -> int:
+    release = load_settings(repository.settings_path)["release"]
+    print("Security Ops OS {}".format(release["version"]))
+    print("  Build revision: {}".format(release["build_revision"]))
+    print("  Desktop label:  {}".format(release["desktop_label"]))
+    return 0
+
+
+def _ensure_build_request_consistent(args: argparse.Namespace) -> None:
+    if not getattr(args, "build", False):
+        requested = any(
+            getattr(args, name, None)
+            for name in ("bundle", "prune_old", "jobs", "cores")
+        )
+        if requested:
+            raise ValidationError("--bundle/--prune-old/--jobs/--cores require --build")
+
+
+def _mutation_build_options(args: argparse.Namespace) -> Dict[str, Any]:
+    _ensure_build_request_consistent(args)
+    return {
+        "bundle": args.bundle,
+        "prune_old": args.prune_old,
+        "jobs": args.jobs,
+        "cores": args.cores,
+        "dry_run": args.dry_run,
+    }
+
+
+def mutate_and_optionally_build(
+    args: argparse.Namespace,
+    repository: Repository,
+    transform: Callable[[Dict[str, Any]], None],
+    runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> int:
+    options = _mutation_build_options(args)
+    build_requested = bool(getattr(args, "build", False))
+    if build_requested and not args.dry_run and not _builder_has_lock_handoff(repository):
+        raise MaintainerError(
+            "make-iso.sh does not support the inherited-lock protocol; "
+            "settings and build were left untouched"
+        )
+    with BuildLock(repository) as lock:
+        changed, _settings = _mutate_settings_locked(
+            repository, transform, args.dry_run
+        )
+        if not build_requested:
+            return 0
+        result = run_build(repository, held_lock=lock, runner=runner, **options)
+        if result != 0 and not args.dry_run:
+            print(
+                "error: ISO build failed with exit {}; the intended settings{} "
+                "remain recorded in {}".format(
+                    result,
+                    " change" if changed else "",
+                    repository.settings_path,
+                ),
+                file=sys.stderr,
+            )
+        return result
+
+
+def handle_package_mutation(
+    args: argparse.Namespace, repository: Repository, action: str
+) -> int:
+    packages = args.packages
+    additions = packages if action == "add" else ()
+    removals = packages if action == "remove" else ()
+    resets = packages if action == "reset" else ()
+    return mutate_and_optionally_build(
+        args,
+        repository,
+        lambda data: update_package_overrides(data, additions, removals, resets),
+    )
+
+
+def handle_kernel_set(args: argparse.Namespace, repository: Repository) -> int:
+    metadata = fetch_kernel_metadata(args.version, repository)
+    return mutate_and_optionally_build(
+        args, repository, lambda data: set_kernel(data, metadata)
+    )
+
+
+def handle_release_set(args: argparse.Namespace, repository: Repository) -> int:
+    return mutate_and_optionally_build(
+        args,
+        repository,
+        lambda data: set_release(
+            data, args.version, args.revision, args.desktop_label
+        ),
+    )
+
+
+def handle_apply(args: argparse.Namespace, repository: Repository) -> int:
+    additions = args.add or []
+    removals = args.remove or []
+    resets = args.reset or []
+    if not any((additions, removals, resets, args.kernel, args.build)):
+        raise ValidationError("apply needs a package action, --kernel, or --build")
+    for package in additions:
+        validate_package_specification(package)
+    for package in removals + resets:
+        validate_package_name(package)
+    addition_bases = {package_spec_base(package) for package in additions}
+    conflicts = (addition_bases & set(removals)) | (addition_bases & set(resets)) | (
+        set(removals) & set(resets)
+    )
+    if conflicts:
+        raise ValidationError(
+            "the same package cannot have multiple actions: {}".format(
+                ", ".join(sorted(conflicts))
+            )
+        )
+    metadata = fetch_kernel_metadata(args.kernel, repository) if args.kernel else None
+    if any((additions, removals, resets, metadata)):
+        def transform(data: Dict[str, Any]) -> None:
+            update_package_overrides(data, additions, removals, resets)
+            if metadata is not None:
+                set_kernel(data, metadata)
+
+        return mutate_and_optionally_build(args, repository, transform)
+    _ensure_build_request_consistent(args)
+    return run_build(
+        repository,
+        bundle=args.bundle,
+        prune_old=args.prune_old,
+        jobs=args.jobs,
+        cores=args.cores,
+        dry_run=args.dry_run,
+    )
+
+
+def add_build_flags(parser: argparse.ArgumentParser, with_trigger: bool) -> None:
+    if with_trigger:
+        parser.add_argument("--build", action="store_true", help="build after the change")
+    parser.add_argument("--bundle", action="store_true", help="create verified release parts")
+    parser.add_argument(
+        "--prune-old", action="store_true", help="prune older local artifacts after success"
+    )
+    parser.add_argument("--jobs", type=positive_integer, help="maximum concurrent Guix jobs")
+    parser.add_argument("--cores", type=positive_integer, help="cores available to each build")
+
+
+def add_mutation_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--dry-run", action="store_true", help="show changes without writing/building")
+    add_build_flags(parser, with_trigger=True)
+
+
+def create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="securityopsctl",
+        description="Safely maintain releases, packages, Linux, and Security Ops OS ISO builds.",
+    )
+    parser.add_argument("--version", action="version", version="%(prog)s {}".format(TOOL_VERSION))
+    commands = parser.add_subparsers(dest="command")
+
+    commands.add_parser("status", help="show settings, build-lock, disk, and ISO status")
+    commands.add_parser("doctor", help="check build prerequisites and integration")
+
+    package = commands.add_parser("package", help="maintain package overrides")
+    package_commands = package.add_subparsers(dest="package_command", required=True)
+    package_commands.add_parser("changes", help="show package additions and removals")
+    for action in ("add", "remove", "reset"):
+        action_parser = package_commands.add_parser(action, help="{} package overrides".format(action))
+        package_help = (
+            "Guix specification: name[@version][:output]"
+            if action == "add"
+            else "base Guix package name"
+        )
+        action_parser.add_argument("packages", nargs="+", help=package_help)
+        add_mutation_flags(action_parser)
+
+    kernel = commands.add_parser("kernel", help="inspect or update Linux")
+    kernel_commands = kernel.add_subparsers(dest="kernel_command", required=True)
+    kernel_commands.add_parser("show", help="show pinned Linux source metadata")
+    kernel_set = kernel_commands.add_parser("set", help="pin an official stable Linux release")
+    kernel_set.add_argument("version", help="stable version, for example 7.1.8")
+    add_mutation_flags(kernel_set)
+
+    release = commands.add_parser("release", help="inspect or update release metadata")
+    release_commands = release.add_subparsers(dest="release_command", required=True)
+    release_commands.add_parser("show", help="show version, revision, and desktop label")
+    release_set = release_commands.add_parser("set", help="set release identity atomically")
+    release_set.add_argument("version", help="stable release version, for example 1.13.0")
+    release_set.add_argument(
+        "--revision", required=True, help="build revision, for example r11"
+    )
+    release_set.add_argument(
+        "--desktop-label", help="desktop label; preserve the current label when omitted"
+    )
+    add_mutation_flags(release_set)
+
+    apply_parser = commands.add_parser(
+        "apply", help="atomically apply package and kernel changes once"
+    )
+    apply_parser.add_argument("--add", nargs="+", action="extend", metavar="PACKAGE")
+    apply_parser.add_argument("--remove", nargs="+", action="extend", metavar="PACKAGE")
+    apply_parser.add_argument("--reset", nargs="+", action="extend", metavar="PACKAGE")
+    apply_parser.add_argument("--kernel", metavar="X.Y.Z")
+    apply_parser.add_argument("--dry-run", action="store_true")
+    add_build_flags(apply_parser, with_trigger=True)
+
+    validate_parser = commands.add_parser(
+        "validate", help="validate settings and the Guile/Guix integration"
+    )
+    validate_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="run pinned kernel, live-image, and generated-installer Guix dry-runs",
+    )
+
+    build_parser = commands.add_parser("build", help="delegate a pinned ISO build to make-iso.sh")
+    build_parser.add_argument("--dry-run", action="store_true", help="show invocation only")
+    add_build_flags(build_parser, with_trigger=False)
+    return parser
+
+
+def _yes_no(prompt: str) -> bool:
+    return input(prompt).strip().lower() in ("y", "yes")
+
+
+def interactive_menu(repository: Repository) -> int:
+    if not sys.stdin.isatty():
+        create_parser().print_help()
+        return 2
+    menu = """
+Security Ops OS Maintainer
+  1. Status
+  2. Doctor
+  3. Show package changes
+  4. Add packages
+  5. Remove packages
+  6. Reset package overrides
+  7. Show kernel
+  8. Set kernel
+  9. Show release metadata
+ 10. Set release metadata
+ 11. Validate
+ 12. Build ISO
+  0. Exit
+"""
+    while True:
+        print(menu)
+        try:
+            choice = input("Select: ").strip()
+            if choice == "0":
+                return 0
+            if choice == "1":
+                show_status(repository)
+            elif choice == "2":
+                doctor(repository)
+            elif choice == "3":
+                show_package_changes(repository)
+            elif choice in ("4", "5", "6"):
+                packages = shlex.split(input("Package name(s): "))
+                if not packages:
+                    print("No packages entered.")
+                    continue
+                action = {"4": "add", "5": "remove", "6": "reset"}[choice]
+                mutate_settings(
+                    repository,
+                    lambda data, selected=packages, operation=action: update_package_overrides(
+                        data,
+                        selected if operation == "add" else (),
+                        selected if operation == "remove" else (),
+                        selected if operation == "reset" else (),
+                    ),
+                )
+            elif choice == "7":
+                show_kernel(repository)
+            elif choice == "8":
+                version = input("Stable Linux version (X.Y.Z): ").strip()
+                metadata = fetch_kernel_metadata(version, repository)
+                mutate_settings(repository, lambda data: set_kernel(data, metadata))
+            elif choice == "9":
+                show_release(repository)
+            elif choice == "10":
+                version = input("Release version (X.Y.Z): ").strip()
+                revision = input("Build revision (for example r11): ").strip()
+                label = input("Desktop label (blank keeps current): ").strip() or None
+                mutate_settings(
+                    repository,
+                    lambda data: set_release(data, version, revision, label),
+                )
+            elif choice == "11":
+                validate_repository(repository)
+            elif choice == "12":
+                bundle = _yes_no("Create release bundle too? [y/N] ")
+                prune = _yes_no("Prune older local artifacts after success? [y/N] ")
+                if _yes_no("Start the pinned ISO build now? [y/N] "):
+                    return run_build(repository, bundle=bundle, prune_old=prune)
+            else:
+                print("Unknown selection.")
+        except MaintainerError as error:
+            print("error: {}".format(error), file=sys.stderr)
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 130
+
+
+def dispatch(args: argparse.Namespace, repository: Repository) -> int:
+    if args.command == "status":
+        return show_status(repository)
+    if args.command == "doctor":
+        return doctor(repository)
+    if args.command == "package":
+        if args.package_command == "changes":
+            return show_package_changes(repository)
+        return handle_package_mutation(args, repository, args.package_command)
+    if args.command == "kernel":
+        if args.kernel_command == "show":
+            return show_kernel(repository)
+        return handle_kernel_set(args, repository)
+    if args.command == "release":
+        if args.release_command == "show":
+            return show_release(repository)
+        return handle_release_set(args, repository)
+    if args.command == "apply":
+        return handle_apply(args, repository)
+    if args.command == "validate":
+        return validate_repository(repository, full=args.full)
+    if args.command == "build":
+        return run_build(
+            repository,
+            bundle=args.bundle,
+            prune_old=args.prune_old,
+            jobs=args.jobs,
+            cores=args.cores,
+            dry_run=args.dry_run,
+        )
+    raise MaintainerError("unknown command")
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if not arguments:
+        return interactive_menu(REPOSITORY)
+    parser = create_parser()
+    args = parser.parse_args(arguments)
+    try:
+        return dispatch(args, REPOSITORY)
+    except MaintainerError as error:
+        print("error: {}".format(error), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

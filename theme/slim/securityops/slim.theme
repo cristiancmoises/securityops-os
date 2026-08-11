@@ -1,4 +1,4 @@
-# SecurityOS — SLiM login theme
+# Security Ops — SLiM login theme
 # A dark, "fsociety"-style login matching the GRUB + desktop wallpaper.
 # The background (background.png) is the same sec.png used everywhere.
 
@@ -26,7 +26,7 @@ welcome_color            #00ff5f
 welcome_font             Verdana:size=20:bold
 welcome_x                50%
 welcome_y                30%
-welcome_msg              SecurityOS  ·  LIVE
+welcome_msg              Security Ops  ·  LIVE
 
 # --- Helper / session line -------------------------------------------------
 msg_color                #9aa0a6

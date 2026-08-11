@@ -3,7 +3,7 @@ Copyright (C) Cristian Cezar Moisés
 Contact: sac@securityops.co
 
 This repository (the Security Ops OS image definition: config.scm, the
-(securityos ...) modules, build scripts and documentation) is licensed under the
+(securityops ...) modules, build scripts and documentation) is licensed under the
 GNU Affero General Public License, version 3 or later (AGPL-3.0-or-later).
 See the LICENSE file for the full text.
 

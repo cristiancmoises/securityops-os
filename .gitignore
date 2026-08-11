@@ -5,6 +5,10 @@
 
 # Editor / scratch
 .aider*
+.codex*
+continue
+__pycache__/
+*.py[cod]
 *~
 \#*\#
 .DS_Store
@@ -15,4 +19,4 @@
 id_*
 *.pem
 *.key
-!securityos/securityops.defconfig
+!securityops/securityops.defconfig

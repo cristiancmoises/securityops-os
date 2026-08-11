@@ -12,10 +12,10 @@
 # name to confirm.  Guix's install model is declarative: what this installer
 # produces is a config.scm you keep and can `guix system reconfigure' forever.
 #
-#   Filesystems : ext4 · btrfs · xfs · zfs(experimental)
+#   Filesystems : ext4 · btrfs · xfs · ZFS (planned; currently disabled)
 #   Encryption  : LUKS2 full-disk (optional)
 #   Desktops    : Sway (Wayland) · i3 (X11) · KDE Plasma
-#   Kernel      : linux-securityos 7.1.3 (hardened, from (securityos kernel))
+#   Kernel      : linux-securityops (version managed by securityopsctl)
 #
 # © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later
 # ============================================================================
@@ -57,7 +57,9 @@ export PATH="/run/setuid-programs:/run/privileged/bin:/run/current-system/profil
 # dies "Unknown terminal: foot" before drawing a thing.  Re-point it at the
 # system profile, which ships every terminal's terminfo (foot, kitty, …).
 export TERMINFO_DIRS="/run/current-system/profile/share/terminfo${TERMINFO_DIRS:+:$TERMINFO_DIRS}"
-SRC=/etc/securityos/src          # embedded (securityos …) modules, for guix -L
+SRC=/etc/securityops/src          # embedded (securityops …) modules, for guix -L
+SUBSTITUTE_URLS="https://substitutes.securityops.com.br https://ci.guix.gnu.org"
+PINNED_CHANNELS="$SRC/channels.scm"
 TITLE="Security Ops OS · Installer"
 # per-uid log so a root-owned /tmp log from a prior `sudo' run can't EACCES the
 # unprivileged pre-elevation open below.
@@ -112,12 +114,57 @@ need_root "$@"
 command -v whiptail >/dev/null 2>&1 || {
   echo "security-ops-install: 'whiptail' not found on PATH — cannot draw the installer." >&2
   exit 1; }
+command -v python3 >/dev/null 2>&1 || {
+  echo "security-ops-install: 'python3' not found — cannot read OS settings." >&2
+  exit 1; }
+
+KERNEL_VERSION=$(python3 -c \
+  'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["kernel"]["version"])' \
+  "$SRC/securityops/settings.json")
+[[ "$KERNEL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "security-ops-install: invalid kernel version in settings.json" >&2
+  exit 1; }
 
 msg(){ whiptail --title "$TITLE" --msgbox "$1" "${2:-14}" "${3:-74}"; }
 yesno(){ whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-74}"; }
 input(){ whiptail --title "$TITLE" --inputbox "$1" 10 74 "${2:-}" 3>&1 1>&2 2>&3; }
 password(){ whiptail --title "$TITLE" --passwordbox "$1" 10 74 3>&1 1>&2 2>&3; }
 menu(){ local p="$1"; shift; whiptail --title "$TITLE" --menu "$p" 20 74 10 "$@" 3>&1 1>&2 2>&3; }
+
+# Resolve the immutable live root named on the kernel command line.  `/` itself
+# is an overlay after Guix switches root, so findmnt(8) on `/` cannot identify
+# the USB and must never be used as the destructive-write guard.
+cmdline_root_spec(){
+  local word root_spec=""
+  local -a words=()
+  read -r -a words < /proc/cmdline
+  for word in "${words[@]}"; do
+    case "$word" in root=*) root_spec="${word#root=}";; esac
+  done
+  [ -n "$root_spec" ] || return 1
+  printf '%s\n' "$root_spec"
+}
+resolve_root_device(){
+  local spec="$1" dev=""
+  case "$spec" in
+    UUID=*|LABEL=*|PARTUUID=*|PARTLABEL=*)
+      dev=$(findfs "$spec" 2>/dev/null || true);;
+    /dev/*)
+      dev=$(readlink -f -- "$spec" 2>/dev/null || true);;
+    *) return 1;;
+  esac
+  [ -n "$dev" ] && [ -b "$dev" ] || return 1
+  readlink -f -- "$dev"
+}
+backing_disk(){
+  local dev
+  dev=$(readlink -f -- "$1" 2>/dev/null || true)
+  [ -n "$dev" ] || return 1
+  # Inverse dependency order walks partition/device-mapper stacks toward the
+  # physical disk.  Whole-disk ISO images already yield their own disk here.
+  lsblk -srnpo NAME,TYPE "$dev" 2>/dev/null | \
+    awk '$2=="disk" { print $1; exit }'
+}
 
 # ---------------------------------------------------------------------------
 # 0. Welcome
@@ -186,9 +233,15 @@ while :; do
   # reserved system accounts would collide with the base accounts (and the
   # generated config already defines its own root) → the install would abort
   # AFTER the disk is wiped.  Refuse them here.
-  case " root nobody daemon bin sys sync mail messagebus sshd guixbuilder nscd " in
-    *" $USERNAME "*) msg "'$USERNAME' is a reserved system account name. Choose another." 9; continue;;
-  esac
+  reserved_users=" root nobody daemon bin sys sync mail messagebus sshd guixbuilder nscd avahi colord gdm geoclue ntpd polkitd "
+  if [[ "$reserved_users" == *" $USERNAME "* ]]; then
+    msg "'$USERNAME' is a reserved system account name. Choose another." 9
+    continue
+  fi
+  if [[ "$USERNAME" =~ ^guixbuilder[0-9]+$ ]]; then
+    msg "'$USERNAME' is reserved for a Guix build account. Choose another." 9
+    continue
+  fi
   break
 done
 FULLNAME=$(input "Full name (optional):" "$USERNAME") || exit 1
@@ -224,10 +277,26 @@ mapfile -t DISKS < <(lsblk -dn -o NAME,TYPE,SIZE,MODEL | \
 DARGS=(); for d in "${DISKS[@]}"; do DARGS+=("/dev/$(echo "$d"|cut -f1)" "$(echo "$d"|cut -f2-)"); done
 DISK=$(menu "Target disk (WILL BE ERASED):" "${DARGS[@]}") || exit 1
 [ -b "$DISK" ] || die "$DISK is not a block device."
-# Guard 1: refuse the disk backing the live root (derive its parent disk).
-LIVESRC=$(findmnt -no SOURCE / 2>/dev/null || true)
-LIVEDISK=$(lsblk -nro PKNAME "$LIVESRC" 2>/dev/null | head -1 || true)
-[ -n "$LIVEDISK" ] && [ "/dev/$LIVEDISK" = "$DISK" ] && \
+# Guard 1: resolve root= from the kernel command line and refuse its physical
+# backing disk.  Fail closed if a non-optical live root cannot be traced: an
+# installer that cannot identify its own medium is not safe to partition disks.
+ROOT_SPEC=$(cmdline_root_spec || true)
+[ -n "$ROOT_SPEC" ] || die "Could not identify the live root from /proc/cmdline.
+Refusing to partition any disk because the boot medium cannot be protected."
+LIVE_ROOT_DEVICE=$(resolve_root_device "$ROOT_SPEC" || true)
+[ -n "$LIVE_ROOT_DEVICE" ] || die "Could not resolve live root '$ROOT_SPEC' to a
+block device. Refusing to partition any disk."
+LIVE_ROOT_TYPE=$(lsblk -dnro TYPE "$LIVE_ROOT_DEVICE" 2>/dev/null | head -1 || true)
+if [ "$LIVE_ROOT_TYPE" = rom ]; then
+  LIVEDISK=""                         # optical media is never in the disk menu
+else
+  LIVEDISK=$(backing_disk "$LIVE_ROOT_DEVICE" || true)
+  [ -n "$LIVEDISK" ] || die "Could not trace live root '$LIVE_ROOT_DEVICE' to
+its physical disk. Refusing to partition any disk."
+fi
+TARGET_DISK=$(readlink -f -- "$DISK")
+log "live root $ROOT_SPEC -> $LIVE_ROOT_DEVICE -> ${LIVEDISK:-optical}; target $TARGET_DISK"
+[ -n "$LIVEDISK" ] && [ "$LIVEDISK" = "$TARGET_DISK" ] && \
   die "$DISK is the disk you booted from. Refusing to wipe the live medium."
 # Guard 2: warn if the target currently has mounted partitions (in use / the
 # booted USB).  The typed confirmation below is still the primary safeguard.
@@ -278,7 +347,7 @@ SUMMARY="Please review — this will ERASE $DISK:
   Locale      : $LOCALE
   Timezone    : $TIMEZONE
   Keyboard    : $KEYMAP $XKBVARIANT
-  Kernel      : linux-securityos 7.1.3 (hardened)"
+  Kernel      : linux-securityops $KERNEL_VERSION (hardened)"
 # Show the full review in a TALL msgbox (an inputbox would clip the last lines),
 # then ask for the typed confirmation in its own short box.
 whiptail --title "$TITLE — review" --scrolltext --msgbox "$SUMMARY" 20 76
@@ -288,8 +357,9 @@ CONFIRM=$(input "This ERASES $DISK. To proceed, type the target device path EXAC
 # ===========================================================================
 # EXECUTION — from here on the disk is modified.
 # ===========================================================================
-# partition node naming (nvme/mmc use pN) — compute BEFORE we touch the disk.
-case "$DISK" in *nvme*|*mmcblk*) P1="${DISK}p1"; P2="${DISK}p2";; *) P1="${DISK}1"; P2="${DISK}2";; esac
+# Whole-disk device names ending in a digit use a `pN' partition suffix
+# (nvme0n1p1, mmcblk0p1, nbd0p1, pmem0p1, ...).  Compute this before any write.
+case "$DISK" in *[0-9]) P1="${DISK}p1"; P2="${DISK}p2";; *) P1="${DISK}1"; P2="${DISK}2";; esac
 
 WIPED=1                        # the on_err trap now cleans up + tells the truth
 {
@@ -329,13 +399,13 @@ case "$FS" in
   btrfs) mkfs.btrfs -f -L securityops "$ROOTDEV";;
   xfs)   mkfs.xfs   -f -L securityops "$ROOTDEV";;
   zfs)   zpool create -f -o ashift=12 -O mountpoint=none -O compression=zstd \
-             -O acltype=posixacl -O xattr=sa securityos "$ROOTDEV"
-         zfs create -o mountpoint=/ securityos/root;;
+             -O acltype=posixacl -O xattr=sa securityops "$ROOTDEV"
+         zfs create -o mountpoint=/ securityops/root;;
 esac
 
 # --- mount target ----------------------------------------------------------
 if [ "$FS" = zfs ]; then
-  zpool export securityos; zpool import -R /mnt securityos; zfs mount securityos/root
+  zpool export securityops; zpool import -R /mnt securityops; zfs mount securityops/root
 else
   mount "$ROOTDEV" /mnt
 fi
@@ -371,18 +441,18 @@ SO_UPASS="$UPASS" SO_RPASS="$RPASS" \
   --root-uuid "$ROOT_UUID" --efi-uuid "$EFI_UUID" \
   --luks-uuid "${LUKS_UUID:-}" 2>&3
 
-# Copy the (securityos …) module tree to the TARGET so the installed system can
-# `guix system reconfigure -L /etc/securityos/src /etc/config.scm' forever
-# (guix system init does NOT carry these source modules across on its own).
-log "copying securityos src to target"
-mkdir -p /mnt/etc/securityos
-cp -aL "$SRC" /mnt/etc/securityos/src 2>&3 || \
-  msg "Warning: could not copy the securityos modules to the target. The install
-will still work, but 'guix system reconfigure' will need -L pointing at a copy
-of the securityos source." 11
+# Copy the (securityops …) module tree to the TARGET so the installed system can
+# use its pinned time-machine for every future reconfigure.  `guix system init'
+# does not carry these source modules across on its own.
+log "copying securityops src to target"
+mkdir -p /mnt/etc/securityops
+cp -aL "$SRC" /mnt/etc/securityops/src 2>&3 || \
+  msg "Warning: could not copy the securityops modules to the target. The install
+will still work, but a future pinned reconfigure will need a replacement copy
+of the Security Ops source and channels file." 11
 
 whiptail --title "$TITLE" --yesno \
-  "Config generated at /mnt/etc/config.scm.\n\nReady to build & install the system with:\n  guix system init -L $SRC /mnt/etc/config.scm /mnt\n\nThis downloads/builds the full system (can take a while).\nProceed?" 16 74 || { msg "Stopped before install. Partitions are prepared; you can inspect /mnt/etc/config.scm and finish manually."; exit 0; }
+  "Config generated at /mnt/etc/config.scm.\n\nReady to install through the pinned channel time-machine, using Security Ops first and GNU Guix CI second.\n\nCache misses build from source and can take a while.\nProceed?" 17 74 || { msg "Stopped before install. Partitions are prepared; you can inspect /mnt/etc/config.scm and finish manually."; exit 0; }
 
 # ---------------------------------------------------------------------------
 # 7. Install
@@ -401,18 +471,21 @@ fi
 # Build & install.  Show the real guix output on the console (no gauge — a gauge
 # would swallow guix's exit status and progress).  Capture the TRUE exit code
 # via PIPESTATUS, and treat set -e off for this block so we report it ourselves.
-log "guix system init"
+log "pinned guix time-machine: system init"
 clear
 cat <<BANNER
   ────────────────────────────────────────────────────────────────
    Security Ops OS — installing to $DISK
-   $FS · $([ "$ENCRYPT" = yes ] && echo 'LUKS2 encrypted' || echo 'no encryption') · $DESKTOP desktop · kernel 7.1.3
+   $FS · $([ "$ENCRYPT" = yes ] && echo 'LUKS2 encrypted' || echo 'no encryption') · $DESKTOP desktop · kernel $KERNEL_VERSION
    This downloads/builds the full system; it can take a while.
    Full log: $LOG
   ────────────────────────────────────────────────────────────────
 BANNER
 set +e
-guix system init -L "$SRC" /mnt/etc/config.scm /mnt 2>&1 | tee -a "$LOG"
+guix time-machine -C "$PINNED_CHANNELS" \
+  --substitute-urls="$SUBSTITUTE_URLS" --fallback -- \
+  system init -L "$SRC" --substitute-urls="$SUBSTITUTE_URLS" --fallback \
+  /mnt/etc/config.scm /mnt 2>&1 | tee -a "$LOG"
 rc=${PIPESTATUS[0]}
 set -e
 
@@ -424,7 +497,9 @@ if [ "$rc" -eq 0 ] && [ -e /mnt/boot/grub/grub.cfg ]; then
       "Security Ops OS was installed to $DISK.\n\nRemove the installation medium and reboot now?" 12 74; then
     sync
     umount -R /mnt 2>/dev/null || true
-    [ "$ENCRYPT" = yes ] && cryptsetup close cryptroot 2>/dev/null || true
+    if [ "$ENCRYPT" = yes ]; then
+      cryptsetup close cryptroot 2>/dev/null || true
+    fi
     reboot
   fi
 else

@@ -1,6 +1,6 @@
 ;; -*- mode: scheme; -*-
 ;;; ===========================================================================
-;;; (securityos home) — Guix Home for the live `securityops' user
+;;; (securityops home) — Guix Home for the live `securityops' user
 ;;; ===========================================================================
 ;;; The maintainer's full home profile: packages (from ~/.config/guix/home.scm,
 ;;; minus the NVIDIA-only / huge-niche ones) + dotfiles + keybinds.  Module
@@ -8,7 +8,7 @@
 ;;; Wired in via guix-home-service-type (config.scm); usable standalone too.
 ;;; NO sensitive data.
 ;;; ===========================================================================
-(define-module (securityos home)
+(define-module (securityops home)
   #:use-module (gnu home services desktop)
   #:use-module (gnu home services fontutils)
   #:use-module (gnu home services gnupg)
@@ -34,7 +34,6 @@
   #:use-module (gnu packages cmake)
   #:use-module (gnu packages commencement)
   #:use-module (gnu packages compression)
-  #:use-module (gnu packages compton)
   #:use-module (gnu packages cran)
   #:use-module (gnu packages curl)
   #:use-module (gnu packages disk)
@@ -140,7 +139,6 @@
   #:use-module (gnu packages xorg)
   #:use-module (gnu packages)
   #:use-module (gnu packages antivirus)
-  #:use-module (gnu packages acct)
   #:use-module (gnu packages apparmor)
   #:use-module (gnu packages monitoring)
   #:use-module (gnu packages security-token)
@@ -156,11 +154,12 @@
   #:use-module (gnu services dbus)
   #:use-module (guix gexp)
   #:use-module (guix packages)
+  #:use-module ((srfi srfi-1) #:select (filter))
   #:use-module (nongnu packages chrome)
   #:use-module (nongnu packages game-client)
   #:use-module (nongnu packages wine)
-  #:use-module (securityops packages apps)                      ; torando-gui
-  #:use-module (securityos packages vaptvupt)                   ; vaptvupt CLI + GUI
+  #:use-module (securityops packages apps)       ; current VaptVupt + Torando
+  #:use-module (securityops settings)            ; maintainer package removals
   #:use-module (gnu home)
   #:use-module (gnu home services)
   #:use-module (gnu home services shells)
@@ -168,9 +167,9 @@
   #:use-module (guix gexp)
   #:export (%home-environment))
 
-(define %wallpaper "/etc/securityos/wallpaper.png")
+(define %wallpaper "/etc/securityops/wallpaper.png")
 
-(define %home-packages
+(define %curated-home-packages
   (list
    torando-gui                              ; Torando Tor-control GUI (securityops)
    vaptvupt  vaptvupt-gui                   ; VaptVupt post-quantum backup (CLI + GUI)
@@ -181,7 +180,7 @@
    atool    audit    awww    bat    bcachefs-tools    binutils
    blueman    bluez    bluez-alsa    borg    brightnessctl    btop
    btrfs-progs    chafa    cl-clx    cl-css    clamav    cmatrix
-   cmus    compton    cool-retro-term    coreutils    desktop-file-utils    dnstracer
+   cmus    cool-retro-term    coreutils    desktop-file-utils    dnstracer
    dosfstools    e2fsprogs    emacs    emacs-emojify    emacs-magit    emacs-nerd-icons
    emacs-org    emacs-org-static-blog    emacs-vterm    enca
    exfat-utils    exfatprogs    fastfetch    fcitx5    fcitx5-qt    feh    ffmpeg
@@ -216,6 +215,14 @@
    xkeyboard-config    xlsx2csv    zip    zoxide
 
    ))
+
+;; Apply the same OS-wide removal mask used by config.scm.  Additions are put in
+;; the system profile, so they are already visible to the live user and do not
+;; need to be duplicated in Guix Home.
+(define %home-packages
+  (filter (lambda (package)
+            (not (member (package-name package) %package-removals)))
+          %curated-home-packages))
 
 (define %sway-config
   (mixed-text-file "sway-config"
@@ -312,7 +319,7 @@ command -q fastfetch; and fastfetch\n")))
                   ("enc"    . "tar -czf - * | openssl enc -e -aes-256-cbc -pbkdf2 -iter 200000 -out secured.tar.gz")
                   ("dec"    . "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in secured.tar.gz | tar xz")
                   ("isolate" . "guix shell --container --network --no-cwd")))))
-     (simple-service 'securityos-xdg-dotfiles
+     (simple-service 'securityops-xdg-dotfiles
                      home-xdg-configuration-files-service-type
                      ;; r7 sway-only: dropped xmonad/xmobar/picom dotfiles.
                      (list (list "sway/config"        %sway-config)
@@ -327,7 +334,7 @@ command -q fastfetch; and fastfetch\n")))
                            (list "lf/colors"          (local-file "dotfiles/lf/colors"))))
      ;; lf's ueberzugpp preview + cleaner scripts → ~/.local/bin/lf/ (keep +x).
      ;; This is what makes `lf' show real images directly in the terminal.
-     (simple-service 'securityos-lf-scripts home-files-service-type
+     (simple-service 'securityops-lf-scripts home-files-service-type
                      (list (list ".local/bin/lf/lfrun"
                                  (local-file "dotfiles/lf/lfrun" #:recursive? #t))
                            (list ".local/bin/lf/preview"

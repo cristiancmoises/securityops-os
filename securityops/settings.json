@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "release": {
+    "version": "1.13.0",
+    "build_revision": "r11",
+    "desktop_label": "wezterm"
+  },
+  "kernel": {
+    "version": "7.1.8",
+    "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.8.tar.xz",
+    "nix_base32": "0j9c88akklsdhivrlx7i0ccgzxcwcgp1zc6dzi65p79796sdq0gz",
+    "sha256": "ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49"
+  },
+  "packages": {
+    "add": [],
+    "remove": []
+  }
+}
