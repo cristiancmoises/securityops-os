@@ -61,6 +61,8 @@ class CodeMarkReleaseTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 1, result.stdout)
             self.assertIn("Verifying CodeMark source manifest", result.stdout)
+            self.assertIn('"ok": false', result.stdout)
+            self.assertIn('"build.sh"', result.stdout)
             self.assertNotIn("Reproducible build:", result.stdout)
 
 
