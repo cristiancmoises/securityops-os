@@ -301,14 +301,42 @@ metadata and package add/remove overrides. `securityopsctl` validates its
 schema, edits it atomically under the ISO build lock, obtains kernel hashes from
 the official kernel.org tarball, and keeps the hand-written package groups
 untouched. Package-only changes reuse the kernel and all unchanged Guix store
-paths; kernel-only changes rebuild the kernel-dependent path. The reusable
-release-engineering prompt is in
-[`docs/MAINTAINER_PROMPT.md`](docs/MAINTAINER_PROMPT.md).
+paths; kernel-only changes rebuild the kernel-dependent path.
 
 Local development images can retain the last published release identity. Before
-publishing a formal release, use `release set`, follow the maintainer prompt,
-and regenerate the release notes/download guide from the verified artifact;
-ordinary package and kernel experiments never rewrite prose documentation.
+publishing a formal release, use `release set` and regenerate the release
+notes/download guide from the verified artifact; ordinary package and kernel
+experiments never rewrite prose documentation.
+
+---
+
+## Source integrity with CodeMark
+
+The release bundle workflow verifies the source with
+[CodeMark 0.3.0](https://github.com/cristiancmoises/codemark/tree/12258d819d636a00453687db1cff9389372303a9)
+before building and again before publishing the bundle. The portable executable
+is checked into `tools/codemark.pyz` with SHA-256
+`d6c9dd09db850a704ff0a33a7a3c75f287d014281ccc4f63a4b9249e873da163`;
+its GPL-3.0-or-later license is in `tools/CODEMARK-COPYING`.
+
+```sh
+python3 tools/codemark.pyz verify . --json
+```
+
+`.codemark/project.json` and `.codemark/manifest.json` are the reviewed source
+reference. The release bundle carries copies of both files. After an intended
+source change, review the diff, update the reference with
+`python3 tools/codemark.pyz mark . --apply`, rerun the project tests, and commit
+the changed source and metadata together. The release build never refreshes the
+reference automatically.
+
+CodeMark marks supported first-party text sources. Its `skipped` report includes
+`securityopsctl` (an extensionless Python program), `securityops/settings.json`,
+documentation, binaries, and the ISO. The ISO and its release parts still require
+the published SHA-256 checks in the download instructions. This CodeMark
+reference is currently unsigned: it detects changes against the committed
+manifest but does not authenticate the publisher. A trusted signing key and
+independently pinned fingerprint are needed for authenticated provenance.
 
 ---
 

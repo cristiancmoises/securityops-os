@@ -1,4 +1,5 @@
 ;; -*- mode: scheme; -*-
+;; CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=d8e66588c25f54a4a9b65f3d76afafde owner="Cristian Cezar Mois\u00e9s"
 ;;; ===========================================================================
 ;;; SecurityOps OS — Live ISO  (GNU Guix System)
 ;;; Slogan: "In Code We Trust."   Logo: assets/sec.png

@@ -3,6 +3,9 @@
 *.iso
 *.iso.sha256
 
+# CodeMark operation lock
+.codemark/lock
+
 # Editor / scratch
 .aider*
 .codex*

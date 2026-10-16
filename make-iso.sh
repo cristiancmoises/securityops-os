@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=82d323b479dc533caeee58fc4e8aa9b4 owner="Cristian Cezar Mois\u00e9s"
 # Build and verify a reproducible Security Ops OS ISO with one command.
 set -Eeuo pipefail
 
@@ -43,7 +44,7 @@ while (($#)); do
     shift
 done
 
-for command_name in awk cat cmp df find flock git guile guix mktemp mv python3 \
+for command_name in awk cat cmp cp df find flock git guile guix mktemp mv python3 \
     rm sha256sum split stat; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "error: required command not found: $command_name" >&2
@@ -113,10 +114,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+verify_codemark() {
+    local archive="$PWD/tools/codemark.pyz"
+    [[ -f "$archive" && ! -L "$archive" ]] || {
+        echo "error: missing regular CodeMark executable: $archive" >&2
+        return 1
+    }
+    printf '%s  %s\n' \
+        'd6c9dd09db850a704ff0a33a7a3c75f287d014281ccc4f63a4b9249e873da163' \
+        'tools/codemark.pyz' | sha256sum -c -
+    python3 "$archive" verify "$PWD" --json
+}
+
 echo ">> Preflight: settings adapter, shell syntax, and patch whitespace"
 bash -n build.sh make-iso.sh \
     securityops/installer/gen-config.sh \
     securityops/installer/security-ops-install
+if $make_bundle; then
+    echo ">> Verifying CodeMark source manifest before the release build"
+    verify_codemark
+fi
 ./securityopsctl validate
 git diff --check
 
@@ -194,6 +211,10 @@ if $make_bundle; then
 
     echo ">> Verifying byte-for-byte part reassembly"
     cat "$bundle_tmp/$iso_name".part?? | cmp - "$iso"
+    echo ">> Rechecking CodeMark source manifest before publication"
+    verify_codemark
+    cp -- .codemark/project.json "$bundle_tmp/CODEMARK-project.json"
+    cp -- .codemark/manifest.json "$bundle_tmp/CODEMARK-manifest.json"
     mv -n -T -- "$bundle_tmp" "$bundle_dir"
     [[ ! -e "$bundle_tmp" && -d "$bundle_dir" ]] || {
         echo "error: could not publish release bundle without replacing a directory" >&2

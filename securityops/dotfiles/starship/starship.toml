@@ -1,3 +1,4 @@
+# CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=59fc980e5e5750bf90a5b2fbe6d180b6 owner="Cristian Cezar Mois\u00e9s"
 [status]
 format = """
 [$directory](bold cyan)($git_branch$git_state$git_status$git_metrics)

@@ -1,3 +1,4 @@
+;; CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=ae54bee41b175e8eb63dbbf70addb3e0 owner="Cristian Cezar Mois\u00e9s"
 ;;; installer.scm — package the Security Ops OS guided installer.
 ;;;
 ;;; Ships the two scripts (security-ops-install + gen-config.sh) into bin/ so

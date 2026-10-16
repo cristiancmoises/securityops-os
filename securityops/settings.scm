@@ -1,4 +1,5 @@
 ;;; settings.scm --- validated maintainer settings for Security Ops OS -*- scheme -*-
+;; CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=fca68cc9891b50419527e4ff0ec9c313 owner="Cristian Cezar Mois\u00e9s"
 ;;;
 ;;; This module is the Guix-facing adapter for settings.json.  Maintainers use
 ;;; ./securityopsctl rather than editing this module.  Keeping mutable data in

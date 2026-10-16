@@ -1,3 +1,4 @@
+;; CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=6626489ebfc5589aaea08a8d53b2f51d owner="Cristian Cezar Mois\u00e9s"
 ;; channels.scm — channels for a reproducible Security Ops live build.
 ;;
 ;; Upstream guix + nonguix, plus the channels used by the image:

@@ -1,4 +1,5 @@
 #!/run/current-system/profile/bin/bash
+# CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=b238a88ba292593fb4a6ce1237b1c774 owner="Cristian Cezar Mois\u00e9s"
 # gen-config.sh — emit a self-contained Security Ops OS /etc/config.scm from the
 # installer's collected choices.  Uses @@PLACEHOLDER@@ tokens replaced with a
 # Guile writer so Scheme special chars ($ in password hashes, \, ") are safe.

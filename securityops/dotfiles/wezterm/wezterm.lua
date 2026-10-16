@@ -1,3 +1,4 @@
+-- CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=688d9510ca7152139ab7538a97c45c0e owner="Cristian Cezar Mois\u00e9s"
 local wezterm = require 'wezterm'
 local config = wezterm.config_builder()
 
