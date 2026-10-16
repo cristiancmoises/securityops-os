@@ -83,11 +83,13 @@ and is honest about the rest.
 ### 1. Get the ISO
 Build it yourself (fully reproducible — see below), or download the v1.13.0
 release. The release includes a BitTorrent download of the four official parts
-and their checksum manifest. The torrent also uses the GitHub release as an
-HTTP webseed, so clients can fetch missing pieces directly from the release.
+and their checksum manifest. A Security Ops OS HTTPS webseed serves the
+torrent files from the seed container, so clients can fetch pieces even
+when no peer connection is available. The parts are also available for
+direct download from the GitHub release.
 
 - [Download the torrent](https://github.com/cristiancmoises/securityops-os/releases/download/v1.13.0/securityops-os-v1.13.0.torrent)
-- Magnet: `magnet:?xt=urn:btih:33b3eb4897a025141c4e3dbe2267bdfd3c4cf6fc&dn=securityops-os-v1.13.0&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&ws=https%3A%2F%2Fgithub.com%2Fcristiancmoises%2Fsecurityops-os%2Freleases%2Fdownload%2Fv1.13.0%2F`
+- Magnet: `magnet:?xt=urn:btih:33b3eb4897a025141c4e3dbe2267bdfd3c4cf6fc&dn=securityops-os-v1.13.0&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&ws=https%3A%2F%2Fguix.securityops.co%2Fsecurityops-os-torrent%2Fv1.13.0%2F`
 
 After the torrent completes, verify every part and reconstruct the ISO:
 
