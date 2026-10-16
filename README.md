@@ -81,12 +81,26 @@ and is honest about the rest.
 ## Quickstart
 
 ### 1. Get the ISO
-Build it yourself (fully reproducible — see below), or use a release image. Then
-**always verify the checksum**:
+Build it yourself (fully reproducible — see below), or download the v1.13.0
+release. The release includes a BitTorrent download of the four official parts
+and their checksum manifest. The torrent also uses the GitHub release as an
+HTTP webseed, so clients can fetch missing pieces directly from the release.
+
+- [Download the torrent](https://github.com/cristiancmoises/securityops-os/releases/download/v1.13.0/securityops-os-v1.13.0.torrent)
+- Magnet: `magnet:?xt=urn:btih:33b3eb4897a025141c4e3dbe2267bdfd3c4cf6fc&dn=securityops-os-v1.13.0&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&ws=https%3A%2F%2Fgithub.com%2Fcristiancmoises%2Fsecurityops-os%2Freleases%2Fdownload%2Fv1.13.0%2F`
+
+After the torrent completes, verify every part and reconstruct the ISO:
 
 ```sh
-sha256sum securityops-live-*.iso        # compare to the published sha256
+sha256sum -c SHA256SUMS.parts
+cat securityops-live-20260810-235949-8f3b9f8717ed.iso.part?? > securityops-live-20260810-235949-8f3b9f8717ed.iso
+sha256sum securityops-live-20260810-235949-8f3b9f8717ed.iso
+# expected: 8f3b9f8717eda7ce7916bd20dd641e2f05516b5b4684d6f636b5bbf440849d99
 ```
+
+The reconstructed ISO is 7,585,067,008 bytes. Keep the official release parts
+and manifest if you prefer to download them directly; their individual hashes
+are listed in `SHA256SUMS.parts`.
 
 ### 2. Write it to a USB stick
 ```sh
