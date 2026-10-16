@@ -20,3 +20,9 @@ id_*
 *.pem
 *.key
 !securityops/securityops.defconfig
+
+# Local-only agent instructions and prompts
+*[Pp][Rr][Oo][Mm][Pp][Tt]*
+AGENTS.md
+CLAUDE.md
+.claude/
