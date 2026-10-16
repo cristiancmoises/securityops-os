@@ -82,16 +82,21 @@ and is honest about the rest.
 
 ### 1. Get the ISO
 Build it yourself (fully reproducible — see below), or download the v1.13.0
-release. The release includes a BitTorrent download of the four official parts
-and their checksum manifest. A Security Ops OS HTTPS webseed serves the
-torrent files from the seed container, so clients can fetch pieces even
-when no peer connection is available. The parts are also available for
-direct download from the GitHub release.
+release. The assembled 7,585,067,008-byte ISO is available through BitTorrent;
+an HTTPS webseed serves it from the seed container when peers are unavailable.
 
-- [Download the torrent](https://github.com/cristiancmoises/securityops-os/releases/download/v1.13.0/securityops-os-v1.13.0.torrent)
-- Magnet: `magnet:?xt=urn:btih:33b3eb4897a025141c4e3dbe2267bdfd3c4cf6fc&dn=securityops-os-v1.13.0&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&ws=https%3A%2F%2Fguix.securityops.co%2Fsecurityops-os-torrent%2Fv1.13.0%2F`
+- [Download the assembled ISO torrent](https://github.com/cristiancmoises/securityops-os/releases/download/v1.13.0/securityops-os-v1.13.0-iso.torrent)
+- Magnet (assembled ISO): `magnet:?xt=urn:btih:fcc5fdf47a90c44c394eb65d5e04b4357e042933&dn=securityops-live-20260810-235949-8f3b9f8717ed.iso&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&ws=https%3A%2F%2Fguix.securityops.co%2Fsecurityops-os-torrent%2Fv1.13.0%2F`
+- [Download the ISO directly](https://guix.securityops.co/securityops-os-torrent/v1.13.0/securityops-live-20260810-235949-8f3b9f8717ed.iso)
+- ISO SHA-256: `8f3b9f8717eda7ce7916bd20dd641e2f05516b5b4684d6f636b5bbf440849d99`
 
-After the torrent completes, verify every part and reconstruct the ISO:
+The GitHub release also provides four parts and a checksum manifest. A separate
+torrent contains those files and uses the same HTTPS webseed:
+
+- [Download the four-part torrent](https://github.com/cristiancmoises/securityops-os/releases/download/v1.13.0/securityops-os-v1.13.0.torrent)
+- Magnet (four parts): `magnet:?xt=urn:btih:33b3eb4897a025141c4e3dbe2267bdfd3c4cf6fc&dn=securityops-os-v1.13.0&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&ws=https%3A%2F%2Fguix.securityops.co%2Fsecurityops-os-torrent%2Fv1.13.0%2F`
+
+After the four-part torrent completes, verify every part and reconstruct the ISO:
 
 ```sh
 sha256sum -c SHA256SUMS.parts
