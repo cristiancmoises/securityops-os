@@ -1,0 +1,115 @@
+;; CodeMark v1 project=4c63e0fe-589c-4944-8449-97e211a38b72 file=6626489ebfc5589aaea08a8d53b2f51d owner="Cristian Cezar Mois\u00e9s"
+;; channels.guix — channels for a reproducible Security Ops live build.
+;;
+;; This is the maintainer's full working channel graph, reproduced at the
+;; exact revisions of the workstation `guix describe` generation that builds
+;; the v1.14.0 image:
+;;   guix, nonguix, radix, rosenthal, small-guix, securityops, gocix,
+;;   sops-guix.
+;; XLibre is provided by the securityops channel itself; the separate
+;; guix-xlibre channel is retired.
+;;
+;; Build reproducibly with:
+;;   ./build.sh --pinned
+;;
+;; Every channel is commit-pinned and authenticated where the channel
+;; publishes an introduction.  The image and build wrapper use Security Ops
+;; as the first substitute and GNU Guix CI as the second; channel Git
+;; repositories remain source inputs.
+
+(list
+ (channel
+  (name 'guix)
+  ;; Authenticated mirror of the Savannah repository kept in the
+  ;; maintainer's primary Forgejo namespace; the introduction and pinned
+  ;; commit still authenticate the channel contents.
+  (url "https://git.securityops.com.br/cristiancmoises/guix.git")
+  (branch "master")
+  (commit "505ade83fc62b438c558653dd57f7fb3b197cc8f")
+  (introduction
+   (make-channel-introduction
+    "9edb3f66fd807b096b48283debdcddccfea34bad"
+    (openpgp-fingerprint
+     "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
+
+ (channel
+  (name 'nonguix)
+  (url "https://git.securityops.com.br/cristiancmoises/nonguix.git")
+  (branch "master")
+  (commit "c241d19ff840dc75556f722b231760d119b6adea")
+  (introduction
+   (make-channel-introduction
+    "897c1a470da759236cc11798f4e0a5f7d4d59fbc"
+    (openpgp-fingerprint
+     "2A39 3FFF 68F4 EF7A 3D29  12AF 6F51 20A0 22FB B2D5"))))
+
+ (channel
+  (name 'radix)
+  (url "https://git.securityops.com.br/cristiancmoises/radix.git")
+  (branch "main")
+  (commit "d12acbe81ae3a5ff9ad8b705a13a5d1613384df4")
+  (introduction
+   (make-channel-introduction
+    "f9130e11e35d2c147c6764ef85542dc58dc09c4f"
+    (openpgp-fingerprint
+     "F164 709E 5FC7 B32B AEC7  9F37 1F2E 76AC E3F5 31C8"))))
+
+ (channel
+  (name 'rosenthal)
+  (url "https://git.securityops.com.br/cristiancmoises/rosenthal.git")
+  (branch "trunk")
+  (commit "bfe0d7379d399c7886e7c991d0c4bd01a3dfb015")
+  (introduction
+   (make-channel-introduction
+    "7677db76330121a901604dfbad19077893865f35"
+    (openpgp-fingerprint
+     "13E7 6CD6 E649 C28C 3385  4DF5 5E5A A665 6149 17F7"))))
+
+ (channel
+  (name 'small-guix)
+  ;; Mullvad VPN package used by config.scm, with its explicit signed
+  ;; Security Ops trust checkpoint.
+  (url "https://git.securityops.com.br/cristiancmoises/small-guix.git")
+  (branch "main")
+  (commit "26cc25719837c8c914079d0df82aafb0e4c66b78")
+  (introduction
+   (make-channel-introduction
+    "59de79f673669b798f650754b629404418464784"
+    (openpgp-fingerprint
+     "0CFA 43B9 AA96 42EA AF2B  E983 C4C6 61C9 ECFB 46E8"))))
+
+ ;; securityops — the maintainer's curated channel (browsers, tor, mullvad,
+ ;; kitty, torando service, XLibre server …).  Provides (securityops …)
+ ;; modules and the compatibility (xlibre) module.
+ (channel
+  (name 'securityops)
+  (url "https://git.securityops.com.br/cristiancmoises/securityops-channel.git")
+  (branch "main")
+  (commit "34a0099058eada895d92069f36feb2267ebfa203")
+  (introduction
+   (make-channel-introduction
+    "1662809a25bf267088b0c066eed8992bd52da8d7"
+    (openpgp-fingerprint
+     "0CFA 43B9 AA96 42EA AF2B  E983 C4C6 61C9 ECFB 46E8"))))
+
+ (channel
+  (name 'gocix)
+  (url "https://git.securityops.com.br/cristiancmoises/gocix.git")
+  (branch "main")
+  (commit "d4beb39153608a68d2278085847cee585ca851b5")
+  (introduction
+   (make-channel-introduction
+    "cdb78996334c4f63304ecce224e95bb96bfd4c7d"
+    (openpgp-fingerprint
+     "8D10 60B9 6BB8 292E 829B  7249 AED4 1CC1 93B7 01E2"))))
+
+ (channel
+  (name 'sops-guix)
+  (url "https://git.securityops.com.br/cristiancmoises/sops-guix.git")
+  (branch "main")
+  (commit "c53e27e533836ea8595626ba6796dee5362f8c4a")
+  (introduction
+   (make-channel-introduction
+    "0bbaf1fdd25266c7df790f65640aaa01e6d2dbc9"
+    (openpgp-fingerprint
+     "8D10 60B9 6BB8 292E 829B  7249 AED4 1CC1 93B7 01E2")))))

@@ -1,0 +1,967 @@
+# Changelog — Security Ops OS
+
+All notable changes to the **Security Ops OS** live image are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/); this project
+versions the *image*, not individual packages (those track the pinned channels in
+`channels.guix`). Each build also carries a visible `build-id` (GRUB menu, login
+greeting, `/etc/securityops/build-id`).
+
+© Cristian Cezar Moisés · AGPL-3.0-or-later OR a separately executed
+commercial agreement for first-party code · sac@securityops.co
+
+> **Release: `1.14.0` (r13 · kernel 7.3.4 · Sway)** —
+> Security Ops OS distribution identity, non-reusable live credentials,
+> protected installer credential transport, scoped dual-licensing notices,
+> the full maintainer channel graph and the fast-install flow (guided
+> installer + Installer 2 + Guix Center).
+
+## [1.14.0] — 2026-11-13
+
+- Refresh the securityops channel pin to `34a009905` (2026-11-14): ArtCraft
+  suite runtime fixes (Wayland client libraries on the runtime path and
+  official upstream redistribution notices), Tor Browser 16.0.1 runtime
+  updates, plus the repackaged Burp Suite Community 2026.10.1, Maltego Graph
+  4.14.0 and the mirim 1.1.1 encrypted-at-rest embedded SQL database — now
+  all baked into the live image.
+- Replace the published v1.14.0 ISO with the refreshed build (same r13
+  identity, Sway label on GRUB/greeter/MOTD) once the ArtCraft suite and the
+  new channel tools are verified; release assets remain torrent + checksums.
+- Build the custom Linux 7.3.4-SecurityOps kernel (hardening + performance
+  recipe) from the cdn.kernel.org source with the developer-authenticated
+  SHA-256 pinned in `securityops/settings.json`.
+- Reproduce the maintainer's full working channel graph at exact commits:
+  guix 505ade83, nonguix c241d19f, radix d12acbe8, rosenthal bfe0d737,
+  small-guix 26cc257, securityops 34a009905, gocix d4beb391, sops-guix
+  c53e27e5, served from the primary Forgejo namespace. Retire the separate
+  guix-xlibre channel: XLibre now ships inside the securityops channel.
+- Refresh package overrides to the newest versions available in the pinned
+  graph: thunar 4.20.10, heroic 2.22.1, steam 1.0.0.87, torbrowser 16.0.1,
+  guixvis 0.8.0, security-ops-installer2 0.1.0, securityops-guix-center 0.2.0.
+- Add the ArtCraft creative suite from official upstream Linux binaries:
+  PhotoCraft 0.9.0, VectorCraft 0.10.0, FilmCraft 0.7.2, LightCraft 0.8.0,
+  PdfCraft 0.8.0, EffectCraft 0.10.0, DesignCraft 0.8.0, FigCraft 0.6.0,
+  WordCraft 0.7.0, SoundCraft 0.5.0, DeckCraft 0.7.0, CADCraft 0.7.0 and
+  GridCraft 0.7.0. Source is MIT or Apache-2.0; ArtCraft brand assets use
+  separate non-free terms.
+- Ship the fast-install flow in the live image: the guided disk installer,
+  Security Ops Installer 2 and the Guix Center frontend/backend, all resolved
+  through the same pinned channel graph.
+- Live image keeps the v1.13.0-series targets: fast boot from squashfs with
+  zram-backed swap, hardening sysctl set, hybrid BIOS/UEFI boot and the
+  Sway / XMonad+XLibre / KDE session chooser.
+- Distribution stays direct-link + torrent (webseeded), mirroring the
+  v1.13.0 method; release pages carry the torrent and checksums, not ISO
+  bytes.
+
+## [Unreleased — Linux 7.3.3 source candidate] — 2026-11-11
+
+- Pin the explicitly requested 7.3.3 source through the real maintainer CLI,
+  after a no-write preview. Match fresh Guix and SHA-256 measurements to the
+  developer-authenticated archive; verify XZ, exact Makefile version and
+  rejection of an incorrect signing-key pin without changing ownertrust.
+- Preserve channel pins, release identity, package overrides and every kernel
+  hardening value/guard. All 29 requested names occur in this source tree's
+  Kconfig declarations; resolved values and dependencies remain unvalidated.
+- CT128's tiny build was denied a read-only bind remount by outer AppArmor
+  before its builder ran. Pinned derivation, compilation, boot and ISO gates
+  remain pending; no production approval, host reconfiguration or new ISO.
+
+## [Unreleased — initial kernel release syntax] — 2026-10-21
+
+- Accept literal canonical `X.Y` and `X.Y.Z` kernel names in the CLI and Guile
+  adapter; retain strict three-component OS release grammar, official URL
+  binding, hash checks and all existing hardening/channel settings.
+- Add Python and native Guile positive/adversarial cases, including initial
+  releases, literal `.0`, leading zeroes, Unicode/control input, URL mismatch,
+  release grammar and missing-Guix no-write behavior.
+- Linux 7.3 dry-run on CT128 now reaches the missing-Guix prerequisite, without
+  changing the existing 7.2.11 pin. This is not source admission, a kernel/ISO
+  build, boot, installation or production approval.
+
+## [Unreleased — shell syntax validation] — 2026-10-18
+
+- Parse each of the five shell scripts separately with Bash in both source
+  validation passes; retain the aggregate ShellCheck invocation and fail-closed
+  handling. The earlier grouped Bash command parsed only its first filename.
+- Add real Bash parser regressions for every script position, preserving
+  process cleanup and checking that fixture bodies are never executed.
+  This is not a pinned build, full regression, boot or production approval.
+
+## [Unreleased — Linux 7.2.11 source candidate] — 2026-10-17
+
+- Update only the canonical kernel metadata through a real `securityopsctl`
+  dry run and setter. Verify the official compressed archive hash and detached
+  developer signature over the uncompressed tar using an isolated public
+  keyring; preserve channel pins, release, packages and all hardening guards.
+- This is not a kernel build or boot. The historical 7.2.8 configure-only
+  result does not qualify 7.2.11; pinned derivation, configure/build, boot and
+  ISO checks remain required. No host kernel change or production approval.
+
+## [Unreleased — Linux 7.2.10 source candidate] — 2026-10-16
+
+- Update only the canonical kernel metadata through `securityopsctl`, after
+  a dry run and fresh Guix download matching the archive digest bound to the
+  earlier verified developer signature. Preserve release, packages, channels
+  and the complete hardening recipe; do not duplicate the version in Scheme.
+- Distinguish this source pin from the historical 7.2.8 configure-only result.
+  Pinned derivation, new configuration/build, boot and ISO validation remain
+  pending; no production approval or host kernel change is implied.
+
+## [Unreleased — live and installed application selection] — 2026-09-27
+
+- Import the GPL guixvis 0.8.0 recipe from SecurityOps channel commit
+  `017b9e3aa09bbafca341dfba7c91ca96211e8020` using immutable hash-bound origins,
+  ordinary pinned Rust/Cargo and preserved build/check/install behavior.
+  Map Guix build parallelism explicitly to Cargo `--jobs`, with phase tests
+  for serial/parallel builds, complete arguments and disabled checks.
+  Add its canonical override without advancing channel pins or adding a service.
+- Extend effective live/generated package checks to seven exact providers;
+  validate guixvis archive/compiler identities and reject a same-version clone.
+  Canonical Store build passed 121 Rust tests, with two upstream live/cache tests
+  ignored; help/version smoke checks passed. Runtime and ISO qualification
+  remain separate pending gates; one build does not prove reproducibility.
+- Add `torbrowser@15.0.19` through the canonical CLI so generated systems retain
+  the GNU Tor Browser already selected by the live OS. Keep all other settings.
+- Extend the real selection checks to six packages and reject a same-version
+  SecurityOps Tor Browser substitution. Retain the two-recipe ambiguity warning;
+  no browser execution, anonymity audit or channel change is implied.
+- Add Heroic 2.20.1 and the SecurityOps Steam 1.0.0.87 wrapper through the same
+  canonical overrides. Extend the effective OS tests to five package identities
+  and reject the alternate Steam 1.0.0.85 in a disposable negative probe.
+- Document inherited Steam HTTP/self-update and Heroic runpath-validation
+  limitations without changing recipes, accepting licenses or starting clients.
+- Select Thunar 4.20.8, Guix Center 0.2.0 and Installer 2 0.1.0 through
+  canonical `securityopsctl` overrides, without changing channel/kernel pins.
+- Test exact package objects, unique selection and default outputs in the live
+  OS and three generated desktop configurations. Keep existing CLI assertions
+  with explicit disposable fixtures and test preservation of unrelated overrides.
+- Preserve Installer 2's disabled Apply operation and outstanding Store
+  provenance findings. No GUI execution, ISO build, host change or release approval.
+
+## [Unreleased — bounded normal-build package discovery] — 2026-09-27
+
+- Route both `build.sh` paths through a dedicated Scheme image entry: only
+  `securityops/packages` is enumerated locally, not `out/cache` or test scripts.
+- Preserve imports, resource ordering/duplicates, outer pinned time-machine,
+  substitute order, fallback, lock and failure status. Reject extra commands,
+  malformed resources, noncanonical directories and unexpected discovery paths.
+- Keep the full validator's three-command dry-run entry unchanged. Add negative,
+  wrapper and real-Guix discovery regressions that cannot build an OS; no ISO,
+  host deployment, Scheme sandbox or production approval follows from them.
+
+## [Unreleased — Linux 7.2.8 source pin] — 2026-09-26
+
+- Updated canonical kernel metadata through `securityopsctl`, with official
+  source hashes and the detached developer signature checked locally.
+- Preserved channel pins and all hardening values. An actual Guix configure-only
+  diagnostic passed the 29-value guard against the 7.2.8 source, not a fixture.
+- Preserved the initial Python substitute HTTP 404; the explicit source fallback
+  built that prerequisite before the kernel configuration test could run.
+- Preserved an upstream Python TLS test failure followed by its automatic retry;
+  the cause remains unresolved, with no claim of failure-free dependency tests.
+- No compiled kernel, boot, host application, new ISO or production approval.
+
+## [Unreleased — opt-in pinned evaluator environment] — 2026-09-26
+
+- Add `quick|full --pinned-guix` to resolve the canonical channel environment
+  once, verify its profile metadata and use it across source A/B and full checks.
+- Keep historical tests and no-option behavior, separate ShellCheck admission,
+  authentication settings, subprocess cleanup and resource limits unchanged.
+- Reject malformed/aliased results, channel mismatches and changed source inputs;
+  never silently retry with the personal profile. Record bootstrap and selected
+  executable identities separately. This does not grant production approval.
+
+## [Unreleased — bounded full-validation package discovery] — 2026-09-26
+
+- Keep the checkout available for explicit imports, but restrict local automatic
+  package discovery to `securityops/packages` inside the existing pinned Guix.
+  The previous root-wide search could evaluate auxiliary Scheme under `out/cache`.
+- Preserve the three dry-run operations, channel entries, ordered substitutes,
+  fallback and locks; reject extra arguments and inherited discovery paths.
+  Guile paths retain immutable Store inputs required by the existing evaluator.
+- Add real Guix discovery tests with harmless excluded sentinels, explicit-import
+  and local-package controls, negative path/argument cases and status propagation.
+  Dispatch interception in these focused tests is not an OS build or full gate.
+- No channel pin, kernel version, host, cache deletion or production flag changed.
+- Ten focused tests pass in current and pinned Guix. Official quick/full stop
+  at source A: 199 tests, one failure due to missing Nonguix in the changed user
+  profile. An explicit previous-profile diagnostic passes 199 tests and all
+  three pinned dry runs; this is not official A/B or production approval.
+
+## [Unreleased — historical hardening integration] — 2026-09-26
+
+- Restored the two historical Phase 48 modules with their real live, generated
+  installer and kernel consumers; the evaluator itself is unchanged.
+- Shared conflict-free sysctl/boot policy, strict IOMMU defaults, disabled VFIO
+  no-IOMMU and HZ=1000; strict resolved Kconfig checks before/after compilation.
+- Restored historical positive/adversarial tests and added a real Guix builder
+  fixture for the helper's imported-module closure. The official quick passes
+  22 checks, with 189 tests per A/B context and no failures/errors/skips.
+- Full repeats the passing source suites but fails in `full-a`; `full-b` is not
+  executed. No kernel build, hardware enforcement, ISO or release is approved.
+  Channels, kernel version, host and unrelated prior repairs remain unchanged.
+
+## [Unreleased — engineering source inventory] — 2026-09-26
+
+- Included exactly 34 reviewed GUI/package-check inputs in the isolated Git
+  index; historical Python bodies are unchanged, with no application activation.
+- Prepared 17 exact public Evelin source prerequisites in an adjacent sparse
+  worktree. Git/source equality is not publisher, toolchain or runtime admission.
+- The real quick evaluator now reaches the test worker, but blocks on a leaked
+  descendant. A separate diagnostic reports 167 tests with no failures/errors/
+  skips; an isolated historical lock-supervisor test reproduces the orphaned
+  `sleep`. This is not a passing A/B gate, new ISO, or production approval.
+
+### Follow-up: test child lifecycle
+
+- Replaced only the lock test's timed payload with a readiness/EOF fixture;
+  `flock --close` remains the supervisor and reaps its child normally.
+- Added three process-boundary regressions, observed failing before the fix and
+  passing afterward, for normal return and injected assertion/KeyboardInterrupt.
+  All historical assertions and production code remain unchanged.
+- Official A/B suites now pass 170 tests each (zero failures/errors/skips), with
+  shell/CLI checks also passing. Overall quick still FAILs at the independent
+  Guile load: `(securityops hardening)` is absent. Full validation remains pending.
+
+## [Unreleased — explicit validation lock preparation] — 2026-09-26
+
+- Added `securityopsctl prepare-validation`, which only prepares/verifies the
+  private build lock without invoking Guix or changing settings.
+- Unified CLI/wrapper lock opening and inherited-descriptor checking. New locks
+  use `0600`; wrong mode/owner/type, hardlinks and symlinks fail closed, without
+  repairing or replacing existing files. No shell redirection opens the lock.
+- Added real-process regression tests on disposable repositories for contention,
+  metadata preservation, inherited descriptors, replacement, FIFO, exec failure,
+  signals, wrapper arguments and help. Guix calls are test doubles, not builds.
+- The evaluator is unchanged; source admission and ISO readiness remain blocked.
+
+## [Unreleased — source validation restoration] — 2026-09-26
+
+- Restored the existing A/B evaluator, structural worker and regression tests;
+  no admission or process-cleanup check was relaxed.
+- Shared the embedded-source selector with `config.scm`, preserving the
+  source anchor and old exclusions while excluding local agent/runtime and
+  handoff artifacts. Private evaluator state is ignored by Git.
+- Focused validation passed 50 tests in each independent context. The project
+  gate is still BLOCKED; this entry does not announce an ISO or release.
+- Validated the existing optional singleton ShellCheck profile path using a
+  disposable profile of an already available Store item. Official quick/full
+  checks advance to `LOCK_UNAVAILABLE`; no gate was relaxed or host profile
+  changed. A non-singleton profile remains rejected.
+
+## [Unreleased — GUI package repair] — 2026-09-26
+
+- Repaired Guix Center and Installer 2 shell/Python launchers and explicit
+  runtime search paths; missing required directories fail construction.
+- Installed shebangs for existing CLI modules which lacked them, and the
+  `phase37_matrix.py` sibling module needed by the Phase 38 helper.
+- Added Store artifact, source-body and import-only checks. Application bodies
+  and Installer 2's disabled Apply operation are unchanged.
+- This is an isolated engineering repair, not a new ISO or release. The full
+  project evaluator and admitted source/channel reconciliation remain blocked.
+
+## [Unreleased — Phase 29 desktop integration] — 2026-08-17
+
+### Added
+
+- Added an immutable live `tuigreet` chooser for Sway, XMonad on the real
+  XLibre server, and KDE Plasma on Wayland. Sway remains the explicit default.
+- Added matching fail-closed installer choices. Generated XMonad systems
+  rewrite GDM's server configuration to `xlibre-configuration`; missing XLibre
+  inputs fail evaluation instead of silently selecting Xorg.
+- Restored `guix-xlibre` at exact commit
+  `09edbfa3c5c4eaafbbb1947445c219ac53c465a6` and documented that content
+  hashing does not replace the channel introduction/signed history which the
+  upstream does not currently publish.
+
+### Security
+
+- Moved desktop session logs from predictable `/tmp` names to the user's
+  private XDG state directory and kept core session binaries store-addressed.
+- Documented X11 same-display observation/injection risks and kept password
+  entry fail-closed: the installer accepts keyboard switching only through a
+  caller-owned Sway IPC socket or a real VT.
+
+## [1.14.0-rc.1] — 2026-08-11 (release candidate; not a final release)
+
+### Added
+- Added complete English and Portuguese licensing/identity documentation and a
+  reproducible implementation prompt capturing the release workflow and its
+  fail-closed evidence requirements.
+
+### Security
+- Removed the reusable live-media password and global passwordless sudo. Each
+  boot now generates a fresh high-entropy console credential, supplies it to
+  `chpasswd` over an anonymous pipe, and displays it only on local VT1. Root is
+  locked and wheel users must authenticate to sudo.
+- The installer no longer asks for or enables a root password. Its administrative
+  user password is transported to the configuration generator through an
+  inherited descriptor, immediately hashed, and never placed in argv or the
+  environment.
+
+### Changed
+- The distribution identifies itself as **Security Ops OS** in
+  `/etc/os-release`, `/etc/issue`, and the GNU-specific `uname -o` field. Linux
+  kernel identity and hardware fields remain accurate. Documentation continues
+  to credit GNU Guix as the declarative build, package, update, and rollback
+  substrate; branding does not imply that third-party GNU software was
+  relicensed.
+- First-party project notices define two independent licensing paths:
+  `AGPL-3.0-or-later`, or rights granted by a separately signed commercial
+  agreement. `LICENSE-COMMERCIAL` is an inquiry/scope notice, not a public
+  proprietary license grant. Every aggregated dependency retains its own
+  license.
+
+### Known release-candidate blockers
+- A final release still requires clean, independently bound release evidence.
+  This entry therefore does not announce a final or remotely published release.
+
+## [1.13.0] — 2026-08-10  ("Security Ops" r11 · kernel 7.1.8 · authenticated substitutes)
+
+### Security
+- **Kernel → Linux 7.1.8-SecurityOps**, the current kernel.org stable release,
+  with the existing portable nonguix driver base and KSPP/performance overlay.
+- **Two explicit authenticated binary substitutes:** the live daemon, generated
+  installed systems, installer invocation, and both build modes now use
+  `https://substitutes.securityops.com.br` first and official
+  `https://ci.guix.gnu.org` second, with their pinned Ed25519 keys. No third
+  cache is inherited; misses deliberately build from source.
+
+### Changed
+- Added the interactive/automation-friendly `./securityopsctl` maintainer tool
+  and canonical `securityops/settings.json`: add/remove packages, fetch and
+  verify a new stable kernel.org release, inspect status, validate, and launch
+  an incremental pinned build without hand-editing Scheme. `./make-iso.sh`
+  remains the hardened build engine: it serializes builds, verifies the ISO,
+  and can transactionally create/reassemble-check release parts with `--bundle`.
+- **Channels refreshed and made reproducible:** Guix, nonguix, sops-guix, gocix,
+  small-guix, and securityops are commit-pinned; every channel has its published
+  introduction. Explicit transitive pins prevent small-guix dependencies from
+  following mutable branches. Added the previously missing small-guix closure,
+  removed unused guix-xlibre, and moved Security Ops to its `.com.br` URL.
+- **Current channel applications are used consistently:** Evelin 4.3.0 and
+  VaptVupt/VaptVupt GUI 5.2.1 replace the shadowed older vendored bindings;
+  their unused legacy modules and archives were removed from the image source.
+- **Release retention is latest-only:** superseded remote releases, assets, and
+  tags are pruned after the new release is published to conserve VPS storage.
+
+### Fixed
+- **Completed `securityos` → `securityops` internally.** The module directory,
+  declarations, imports, embedded source path, installer paths, artifact name,
+  and documentation now agree; the half-renamed tree could not load its kernel
+  module and had also corrupted Git's index.
+- Restored the real `linux-securityops` package binding in `config.scm` and
+  replaced the stale live-user SHA-512 hash, so the documented `securityops`
+  login works again.
+- Hardened the embedded-source selector so ignored assistant histories, local
+  assistant settings, Python bytecode, build output, and common private-key/token filenames cannot leak
+  into the published image; sanitized provenance docs no longer repeat host
+  disk or resolver identifiers.
+- The installer-generated system now preserves the same substitute trust policy
+  and pinned channels instead of silently returning to Guix's defaults. Install
+  and reconfigure run through the pinned time-machine so channel modules exist;
+  generated configs are mode 0600, and Sway's browser shortcut has its matching
+  package. The destructive installer and its shortcut are now live-media-only.
+- Installed systems now retain Landlock activation and the live image's
+  default-drop nftables policy, while no SSH daemon is enabled implicitly.
+- The installer resolves the live medium from the kernel's real `root=` device
+  and fails closed if it cannot protect that disk; it also rejects every account
+  name contributed by the generated desktop system.
+- Tor now exposes the loopback TransPort/DNSPort/ControlPort expected by Torando,
+  preventing its opt-in per-user killswitch from redirecting traffic to closed
+  ports. Removed the unsafe universal `tsc=reliable` boot override.
+
+## [1.12.1] — 2026-07-09  ("Security Ops" r10 · starship-clean)
+
+### Fixed
+- **Two `starship.toml` keys logged config warnings on first shell.** Removed
+  `[status].error_symbol` (an `[character]` key, invalid under `[status]`) and
+  `[python].scan_for_pyfiles` (removed from starship). Verified with starship
+  1.25.1: `starship prompt` now emits no config warnings; the prompt is unchanged.
+  Everything else is identical to 1.12.0.
+
+## [1.12.0] — 2026-07-09  ("Security Ops" r10 · wezterm · fast · kernel 7.1.3)
+
+### Fixed
+- **The installer still didn't run — the real culprit was `sudo` itself.** The
+  script put `/run/current-system/profile/bin` first on `PATH`, so `sudo`
+  resolved to the **non-setuid** store copy and failed with *"effective uid is
+  not 0 … nosuid"*. Now `PATH` leads with `/run/setuid-programs:/run/privileged/bin`
+  and `need_root` execs the setuid sudo explicitly. (This is on top of the r9
+  `TERMINFO_DIRS` fix.)
+
+### Changed
+- **WezTerm is the default terminal; `foot` is removed.** `$term` is WezTerm in
+  the sway config, the autostart and `Super+Return` open it, and the installer
+  keybind uses `wezterm start --`. `wezterm.lua` is tuned for a boot-anywhere
+  image: `front_end = 'OpenGL'` (works on the Mesa **llvmpipe** software renderer
+  of the no-GPU entries, not just real GPUs), `default_prog` = **fish**, and a
+  font fallback through fonts the image actually ships. `lf`'s inline preview
+  automatically uses WezTerm's kitty graphics protocol.
+- **Ported the maintainer's safe fish aliases** — only the self-contained subset
+  (`c`, `e`, `f`, `ll`, `ls`, `grep`, `del`, `s`, `7`, `zip`, `gu`, `repair`,
+  `enc`/`dec`, `isolate`, `lf`, …); nothing pointing at private scripts, hosts,
+  keys or `/home` paths (the ISO stays sanitized).
+
+### Performance
+- Boot one-shot now also moves every CPU to the modern **`schedutil`** governor
+  (best-effort) for snappier frequency scaling, alongside the r9 MGLRU-default +
+  CAKE and the existing zram / earlyoom / fontconfig-prewarm.
+
+## [1.11.0] — 2026-07-08  ("Security Ops" r9 · fast · kernel 7.1.3)
+
+### Fixed
+- **Terminals/apps failing for a nonexistent `berkeley` user.** `kitty.conf` and
+  `alacritty.toml` hardcoded the build host's `/home/berkeley/.guix-profile/bin/fish`;
+  they now use `/run/current-system/profile/bin/fish`, which exists for the live
+  `securityops` user.
+- **The installer would not start.** `security-ops-install` self-elevated with
+  `sudo -E` (refused by the default `env_reset`) and `sudo`'s `secure_path` didn't
+  include the Guix profile. Now it re-execs via `sudo` with the **absolute** script
+  path (no `-E`), the sudoers gets a `secure_path` that includes the profile, and
+  it fails loudly if `whiptail` is somehow missing.
+
+### Added
+- **One-key installer launch:** `Super+Shift+I` in sway opens the guided installer;
+  the plain command is now just `security-ops-install` (no `sudo` needed).
+- **Apps:** **LibreWolf** (hardened Firefox; the `Super+e` bind), **qBittorrent**,
+  **VaptVupt** (PQ backup/compression), plus **feh**, **ueberzugpp**, **chafa**,
+  **xclip**. (Turbo Recorder, Esquema, ungoogled-chromium, mpv were already in.)
+- **`lf` terminal file manager with real inline image preview** — the maintainer's
+  ueberzugpp `preview`/`cleaner` scripts + `lfrc` are shipped to `~/.config/lf` and
+  `~/.local/bin/lf`, so images (and animated gif/webp/video frames) render directly
+  in the terminal pane; `chafa` is the tty fallback.
+- **Channels baked in:** `/etc/guix/channels.scm` is the maintainer's set (guix +
+  nonguix + guix-xlibre + securityops), so `guix pull` on the running system picks
+  up the securityops/guix-xlibre packages.
+
+### Changed
+- **Kernel → Linux 7.1.3** with an expanded overlay: **Landlock** LSM,
+  `FORTIFY_SOURCE`, `SCHED_STACK_END_CHECK` (security) and **MGLRU on by default**
+  (`LRU_GEN_ENABLED`) + the **CAKE** qdisc (performance).
+
+## [1.10.1] — 2026-07-07  ("Security Ops" r8 · guided installer · kernel 7.1.2)
+
+Same feature set as the unreleased 1.10.0 tag, with the installer's generated
+`config.scm` corrected: a real `guix system build` caught that the bootloader
+was handed the `keyboard-layout` procedure instead of a layout record (a dry run
+had missed it), plus reserved-username / non-UEFI / ZFS are now declined before
+any disk is touched, and `locale-definitions` are emitted. 1.10.0 shipped no
+release assets; use 1.10.1.
+
+The live image is now **installable**. The hardened kernel, a Wayland/X11/KDE
+desktop of your choice and a core security toolset can be written to a real disk
+(optionally LUKS-encrypted) by a branded, guided TUI — no manual `guix system
+init`, no hand-written `config.scm`. (The installed system ships a hardened base
++ a curated core toolset; the live image's full arsenal is one `guix install`
+away, and the config stays declarative so you can add whatever you want.)
+
+### Added
+- **`security-ops-install` — a guided, branded disk installer** shipped *in* the
+  live ISO (run `sudo security-ops-install`). A black-background / cyan-text
+  **whiptail** TUI with the Security Ops banner walks you through:
+  - **Filesystem**: ext4 · Btrfs · XFS (ZFS is shown but *planned* — see Notes).
+  - **Full-disk encryption**: optional **LUKS2** (`cryptsetup luksFormat`), your
+    passphrase, never stored.
+  - **Desktop**: **Sway** (Wayland, default) · **i3** (X11) · **KDE Plasma**.
+  - **Locale, timezone, keyboard, hostname**, and **user + root accounts**
+    (passwords are hashed with `openssl passwd -6`; plaintext never touches disk).
+  - It then **generates a self-contained declarative `/etc/config.scm`** for your
+    exact choices, **partitions** the disk (GPT: 512 MiB ESP + root), makes the
+    filesystem, and runs **`guix system init`**. The installed system stays
+    100 % declarative — keep the file and `sudo guix system reconfigure` forever.
+  - Safety first: it touches **no disk** until you **type the target device path**
+    to confirm; it refuses the disk you booted from and warns on mounted targets;
+    a `cow-store` overlay routes the install to the target disk (not RAM).
+- **Esquema — rootless, Guile-native container runtime** is now in the system
+  profile (`(securityops packages esquema)`). C sandbox primitives (user / mount /
+  PID / UTS / IPC / net / cgroup namespaces, `pivot_root`, full capability drop,
+  seccomp-BPF allowlist, `NO_NEW_PRIVS`) exposed to a Guile FFI + Scheme runtime.
+  Upstream: `git.securityops.co/cristiancmoises/esquema`.
+
+### Changed
+- **Custom kernel → Linux 7.1.2** (`linux-securityops`, vanilla kernel.org + the
+  same KSPP hardening + performance overlay; `uname -r` = `7.1.2-SecurityOps`).
+- The live config now carries a dormant **`cow-store`** service (auto-start off),
+  activated by the installer so `guix system init` writes to the target disk.
+
+### Notes
+- **ZFS root is not yet selectable.** Root-on-ZFS needs an out-of-tree module the
+  Security Ops kernel doesn't carry; the installer lists ZFS but declines it (with
+  a clear message) rather than wipe a disk it can't finish. ext4 / Btrfs / XFS are
+  fully wired. UEFI only for now (grub-efi + ESP).
+- Validation: the generated config's shared structure (kernel, initrd, GRUB
+  config + keymap, services) was proven with a **real** `guix system build`
+  (Sway/ext4); the i3/KDE and Btrfs/XFS/LUKS variants were validated by lowering
+  (`guix system build -n`). A dry run alone is not enough — it missed a real
+  GRUB keyboard-layout bug that only a full build surfaced (now fixed).
+
+## [1.9.0] — 2026-06-30  ("Security Ops" r7 · sway-only · blazing-fast)
+
+Sway-only, and the real fix for the "stuck 2-3 minutes after login" stall.
+
+### Fixed
+- **The 2-3 minute post-login freeze: fontconfig cache rebuild on first GUI
+  launch.**  On a live image the first app to draw text (foot/waybar) made
+  fontconfig scan every font through the compressed live overlay and build its
+  cache — a multi-minute hang that *looked* like the desktop was stuck.  Now a
+  **boot-time shepherd one-shot runs `fc-cache -f`** (system-wide
+  `/var/cache/fontconfig`, which fontconfig reads first) in parallel with the
+  greeter, so by the time you log in the cache is warm and the first render is
+  instant.  Verified: fontconfig's default config lists `/var/cache/fontconfig`
+  as its first `<cachedir>`, so the root-built cache is used by the user session.
+
+### Changed
+- **Sway-only.**  The entire X11 stack was removed: XLibre (xlibre-server built
+  from source), the precompiled xmonad binary, xinit, and the whole
+  `xorg`/ModulePath machinery.  No more "GLX no stencil"/wallpaper-only failure
+  class, a much smaller image, and a faster build.  greetd/tuigreet now launches
+  the single **sway** session directly (`tuigreet --cmd`) — no F3 chooser.
+- **Desktop apps moved to the SYSTEM profile** (sway, foot, waybar, mako, wofi,
+  rofi, swaybg, nm-applet, wl-clipboard, grim/slurp, fonts): they are on PATH the
+  instant greetd hands off, so the session no longer **blocks waiting for
+  Guix-Home activation** (the old ≤8-15 s wait is gone — the prelude just sources
+  the home profile if present).
+- Trimmed the home profile of X11 packages (xmonad/xmobar/picom/st/xterm/xrandr/…)
+  and their dotfiles → smaller, faster home activation.
+
+## [1.8.0] — 2026-06-25  ("Security Ops" r6)
+
+Rename, slim/fast first-launch, real input config, and curated tool additions.
+
+### Changed
+- **Renamed the OS to "Security Ops"** in all user-visible text (GRUB menu, login
+  greeting, MOTD, README, ISO volume label `SECURITY_OPS_LIVE`).  Internal
+  identifiers (`securityops` modules/paths, `securityops` user, channel) unchanged.
+- **Faster first launch:**
+  - Dropped ~90 home fonts (system `%font-packages` already covers the dotfiles;
+    the extra fonts only slowed the first-app fontconfig scan) and removed the
+    dev toolchains (gcc/ghc/go/rust/node/openjdk/ruby), heavy GUI apps
+    (libreoffice/gimp/krita/obs/qemu/virt-manager/telegram/steam), the Qt stack
+    (pulled in as deps), and SYSTEM-profile duplicates from the home profile —
+    much smaller closure, much quicker Guix-Home activation.
+  - Kernel cmdline: restored `quiet loglevel=3`, added
+    `random.trust_cpu=on random.trust_bootloader=on` (no more boot-blocking
+    "gathering entropy" wait) and `GC_MARKERS=1 GC_NPROCS=1` (dodge the initrd
+    guile/libgc segfault).
+  - xmonad no longer autostarts a 2nd Tor or the heavy Mullvad GUI; the
+    home-activation wait was tightened.
+- **Real input handling** in both desktops: sway gains proper
+  `type:touchpad`/`type:pointer`/`type:keyboard` blocks (tap, natural-scroll,
+  two-finger, DWT, accel) and full keybind parity (workspaces 1-9, layouts,
+  media/brightness keys via `pactl`/`brightnessctl`); X11/xmonad gains matching
+  libinput `InputClass` sections (adopted from the maintainer's working config).
+
+### Added
+- `turborec` (screen+audio recorder), `evelin` (post-quantum transport — prebuilt
+  static binaries) to the image.  `keepassxc` + `torando` were already present.
+- `brightnessctl` to the system profile (for the sway brightness keys).
+
+### Deferred (by choice, to keep r6 fast)
+- `librewolf` (no substitute, hours-long OOM-prone source build — keybinds fall
+  back to chromium; `guix install librewolf` post-boot), and `btp` + `mirim`
+  (need host Rust builds; planned for a follow-up).
+
+## [1.7.2] — 2026-06-25
+
+THE root cause (found by a multi-agent god-tier review): three rounds of fixes
+changed nothing because the real defect was never a dotfile.
+
+### Fixed
+- **XLibre could not load GLX / glamor / the modesetting driver — the true cause
+  of "glx no stencil", the "many errors" spew, and the wallpaper-only desktop.**
+  XLibre 25 ships `libglx.so`, `libglamoregl.so` and `modesetting_drv.so` under
+  `<xlibre-server>/lib/xorg/modules/xlibre-25/{,extensions,drivers}`, but Guix's
+  stock `xorg-wrapper` generates a `ModulePath` that points only at the BARE
+  `lib/xorg/modules` (which contains nothing but the `xlibre-25/` subdir) plus
+  the separate `xlibre-video-*` packages.  Xorg does not recurse, so those core
+  modules were off-path and never loaded; X limped up on vesa/fbdev.  No
+  picom/rofi/sway/dotfile edit could ever touch this — which is why the symptoms
+  were invariant across rounds 1–3.
+  - Fix: the xmonad session now passes an explicit, COMPLETE `-modulepath` to the
+    server (the `xlibre-25` tree first, then every video/input driver package),
+    plus `-keeptty` so the rootless server keeps DRM master under logind.  See
+    `securityops/sessions.scm` (`%extra-module-dirs`, `%xmonad-launch`).
+- **picom** switched to the `xrender` backend (no GLX consumer left in the X
+  session) + `picom -b --backend xrender` belt-and-suspenders.
+
+### Added
+- **Unmissable build-version stamp** (`%build-version`): in the GRUB menu labels
+  (visible before login, survives any GPU failure), the tuigreet greeting,
+  `/etc/securityops/build-id`, and the MOTD — so it is trivial to confirm WHICH
+  image is booted (`cat /etc/securityops/build-id`).
+- **Boot diagnostics**: `/tmp/xorg.log` (X server, `-verbose 6`),
+  `/tmp/xmonad-session.log`, `/tmp/sway.log`.
+- `build.sh` now writes an **epoch-second-named** ISO + a `.sha256` sidecar so a
+  same-day rebuild can never be mistaken for a previous one.
+
+## [1.7.1] — 2026-06-25
+
+Problems persisted on the real Intel IdeaPad after 1.7.0.  Two decisive changes
++ diagnostics, since the desktop's only GLX consumer was the compositor.
+
+### Fixed
+- **Made the X session GLX-proof.**  In the xmonad session the *only* component
+  that touched GLX was picom; everything else (xmonad/xmobar/rofi/terminals) is
+  2D.  Switched `dotfiles/picom/picom.conf` to the **`xrender`** backend (no
+  OpenGL at all) and disabled blur, so the "glx … stencil" failure cannot occur
+  on any GPU — the desktop now comes up wherever modesetting can put a
+  framebuffer.
+
+### Added
+- **Boot diagnostics.**  The xmonad session now writes the X server log to
+  `/tmp/xorg.log` (`-logfile … -verbose 6`) and the full session stdout/stderr
+  (incl. startupHook spawn errors) to `/tmp/xmonad-session.log`; sway already
+  logs to `/tmp/sway.log`.  If anything still misbehaves on real hardware, those
+  three files pin the cause instead of guessing.
+- Build now emits a distinctly-named `securityops-live-YYYYMMDD-r2.iso` and
+  **deletes every other ISO** in `out/`, so there is no chance of burning a
+  stale image.
+
+## [1.7.0] — 2026-06-25
+
+Second real-hardware pass (Intel IdeaPad): fix the XLibre GLX error, rofi not
+loading, and make sway resilient.
+
+### Fixed
+- **XLibre: "GLX … no stencil" + broken/blank compositing.**  Two causes:
+  1. **picom config was invalid.**  `dotfiles/picom/picom.conf` set
+     `active-opacity`/`inactive-opacity` to **1.5** (opacity must be 0.0–1.0) and
+     used the **long-removed** `glx-use-copysubbuffermesa` option, so modern picom
+     rejected the file and aborted with GLX errors.  Rewritten to a clean, valid
+     config (opacities ≤ 1.0, deprecated/duplicate options removed).
+  2. **The Intel SNA DDX was being used.**  `xlibre-video-intel` (SNA) is broken
+     on modern Intel iGPUs (gen9+) and fails to advertise a usable GLX/glamor
+     visual.  It is now **dropped** from the X driver set, so XLibre auto-selects
+     its built-in **`modesetting` + glamor** driver (the correct modern path); an
+     `OutputClass` pins `modesetting`/`glamor`/`DRI 3` whenever the i915 KMS
+     driver is bound.  `vesa`/`fbdev` stay for the `nomodeset` safe-graphics
+     entries.
+- **rofi did not load.**  `dotfiles/rofi/config.rasi` ended with
+  `@theme "/home/berkeley/.local/share/rofi/themes/squared-nord.rasi"` — a
+  build-host path that does not exist on the live system (wrong user, file not
+  shipped), so rofi aborted on startup.  Now uses a theme that **ships with
+  rofi** (`gruvbox-dark`), and `rofi` is added to the **system** profile so it is
+  on PATH even before Guix-Home finishes activating.
+- **sway "did not work".**  The launcher now ensures `XDG_RUNTIME_DIR` exists and
+  **retries with the pixman software renderer** if the hardware GLES2 renderer
+  fails to initialise (robust on odd GPUs / no-KMS), still logging to
+  `/tmp/sway.log`.
+
+- **"Many errors" at login = dead commands in the dotfiles.**  A parallel
+  adversarial audit of every command xmonad/sway spawn confirmed 8 references to
+  binaries/scripts that do not exist on the sanitized image.  Each is now fixed
+  while keeping the maintainer's keys + intent:
+  - `xmonad.hs` startup `spawnOn "2" "libre"` → `librewolf 2>/dev/null || chromium`
+    (`libre` was never a real binary).
+  - `M-e` and sway `$mod+e` launched **librewolf** (intentionally not installed)
+    → now `librewolf 2>/dev/null || chromium`, so they work out of the box and
+    automatically prefer librewolf if you `guix install` it post-boot.
+  - `fcitx5 -d -r` at startup needed the **fcitx5 daemon**, but only `fcitx5-qt`
+    was installed → added the `fcitx5` package to the home profile.
+  - `M-o` (`/scripts/batata.sh`), `M-k` (`~/scripts/tmp.sh`) and `M-m`'s
+    `covers.sh` referenced personal scripts stripped during sanitization → now
+    guarded (`[ -x … ] && …`), so they no-op silently instead of erroring, and
+    still work if you drop the scripts back in.
+  - `M-p` (`openshot-qt`, not packaged) → guarded with `command -v`.
+  - `M-ç` ran `~/.local/bin/noisetorch`; the binary is in the profile → now bare
+    `noisetorch` (resolves on PATH).
+- **Per-login `modprobe -r dccp sctp rds tipc` always failed (EPERM).**  Moved
+  this protocol-hardening to the **kernel command line**
+  (`module_blacklist=dccp,sctp,rds,tipc`), where it actually takes effect and
+  produces no error.
+
+### Changed
+- `rofi` and `wezterm` added to the **system** package set (so the `M-d` launcher
+  and the default terminal work regardless of Guix-Home timing).
+- Dropped the spurious `Option "DRI" "3"` (not a modesetting option) and the
+  deprecated picom `glx-no-stencil` — both only produced startup warnings.
+
+## [1.6.0] — 2026-06-24
+
+Fix both desktops failing to start on real hardware + cut login lag.
+
+### Fixed
+- **xmonad showed only the wallpaper, WIN keybinds dead.**  Root cause: the
+  session ran `xmonad --recompile` at every login, but the live profile has no C
+  toolchain on PATH, so GHC aborted with **"could not execute: gcc"**.  xmonad
+  then silently fell back to its **default** config (Alt mod, no autostart) →
+  blank desktop.  The recompile was also the bulk of the **login lag**.
+  - Fix: the maintainer's `xmonad.hs` is now **compiled once at image-build time**
+    into a standalone `xmonad-x86_64-linux` binary (new package
+    `(securityops packages xmonad-config)`, built against ghc + xmonad-contrib +
+    xmobar + **gcc-toolchain**).  The X session execs it directly — **no runtime
+    GHC, no recompile, no gcc dependency, no lag**; WIN (Mod4) keybinds and the
+    startupHook are live the instant X comes up.  Verified under Xvfb: it owns
+    the root window and performs **no** recompile even with `xmonad.hs` present.
+- **sway did not launch / came up blank.**  Same first-login race: the desktop
+  autostarted `foot`/`waybar`/`swaybg` before Guix-Home finished activating, so
+  none of them were on PATH yet.  (The elogind seat + `XDG_RUNTIME_DIR` were
+  confirmed fine.)  sway now also logs to `/tmp/sway.log` (run with `-d`) so any
+  residual failure is diagnosable.
+
+### Changed
+- **Both session launchers now wait (≤15 s) for Guix-Home activation** before
+  starting the desktop, and guarantee `XDG_RUNTIME_DIR` — eliminating the
+  first-login "nothing spawns" race for xmonad *and* sway.
+- Added `xrdb` to the X stack (referenced by the startupHook).
+
+## [1.5.0] — 2026-06-24
+
+Rebrand to **SecurityOps OS** + a performance pass.
+
+### Changed
+- **Rebrand:** the project/OS is now **SecurityOps OS**; GRUB titles, the greeter,
+  `/etc/motd`, and docs renamed. All **"fsociety"/"anonymous"** wording removed
+  (the `font-anonymous-pro` *font* is unaffected); the `anon.png` placeholder is
+  gone. Logo/wallpaper = **`assets/sec.png`** (the top-hat logo) on GRUB + both
+  desktops. Slogan **"In Code We Trust."** in the greeter, `/etc/motd`, and the
+  config header.
+
+### Performance (deep audit + fixes)
+- Kernel `.config` audited: `CC_OPTIMIZE_FOR_PERFORMANCE`, `PREEMPT_DYNAMIC`
+  (`preempt=full` on the cmdline), `HIGH_RES_TIMERS`, `NO_HZ_IDLE`,
+  `SCHED_AUTOGROUP`, `LRU_GEN` (MGLRU), THP, `ZRAM/ZSWAP`, BBR/fq — all present.
+- **Enable Multi-Gen LRU at boot** (`CONFIG_LRU_GEN=y` but not default-on): a
+  one-shot service writes `/sys/kernel/mm/lru_gen/enabled` + a 1 s min-TTL —
+  better reclaim under pressure (the live root is a RAM overlay).
+- **Expanded sysctl perf profile:** `vfs_cache_pressure=50`,
+  `dirty_writeback_centisecs`, `sched_autogroup_enabled`, BBR + `fq` +
+  `netdev_max_backlog=16384`, `rmem/wmem_max=16M`, `tcp_fastopen=3`,
+  `tcp_mtu_probing` (atop the existing zram-tuned swappiness/page-cluster).
+- Note: `HZ=250` (broad-config default; `HZ_1000` would need a ~45-min kernel
+  rebuild for a marginal gain given HIGH_RES_TIMERS + full preempt — left as an
+  optional toggle).
+
+## [1.3.0] — 2026-06-23
+
+Make the desktops actually *usable* on real hardware, and add a proper GNU Guix
+Home. Driven by feedback that on a Lenovo IdeaPad (Intel) xmonad came up showing
+only the wallpaper and sway was a black screen.
+
+### Added
+- **`securityops/home.scm` — a real GNU Guix Home** (`%home-environment`):
+  user-facing packages plus dotfiles & keybinds for both desktops — `xmonad.hs`,
+  `xmobar`, `sway`, `waybar`, `foot`, `alacritty`, and `fish` (via
+  `home-fish-service-type`). Wired into the live system with
+  `guix-home-service-type`, and usable standalone (`guix home reconfigure
+  securityops/home.scm`).
+
+### Fixed
+- **Desktops came up empty** (xmonad = bare wallpaper, sway = black screen):
+  nothing was being autostarted. Both session launchers now **autostart a
+  terminal + wallpaper** on login and put **both the Guix-Home and system
+  profiles on `PATH`** so spawned apps are always found.
+  - **xmonad** (verified booting to a usable desktop in QEMU): a terminal
+    (`alacritty`) opens on login; **default Alt keybinds** are active
+    (`Alt`+`Shift`+`Enter` terminal, `Alt`+`p` dmenu, `Alt`+`1..9` workspaces).
+  - **sway**: reads the full `~/.config/sway/config` from Guix Home directly (no
+    compilation) — explicit `swaybg` wallpaper, **waybar**, **mako**, an
+    autostarted `foot`, and Super keybinds; auto-selects the **pixman** software
+    renderer when there is no GPU render node.
+
+### Changed
+- Replaced the hand-rolled `/etc/skel`-style activation service with Guix Home.
+
+### Known limitations
+- **xmonad's *custom* config (`~/.config/xmonad/xmonad.hs`, Super keybinds +
+  xmobar) is provided in `home.scm` as a starting point but is NOT active on the
+  live image**: xmonad 0.18 must compile it with GHC, which isn't shipped (it
+  would add ~1.5 GB and `GHC_PACKAGE_PATH` isn't auto-set). The live xmonad runs
+  the reliable built-in config (no compile, instant). To enable the custom one:
+  `guix install ghc ghc-xmonad ghc-xmonad-contrib` then `xmonad --recompile`.
+- **sway requires a real GPU** (KMS/DRM); it could not be confirmed rendering
+  under QEMU's emulated GPU. It should work on the Intel/AMD **GPU** boot
+  entries; on the no-GPU entries use **xmonad**.
+
+[1.3.0]: #130--2026-06-23
+
+## [1.2.0] — 2026-06-23
+
+Boot reliably from a USB stick, ship a custom kernel, and let the operator pick
+between **two** desktops at login. Driven by a real-world kernel panic when
+booting a raw-`dd`'d USB and a request for the latest kernel + hardening + a
+Wayland option.
+
+### Added
+- **Custom Linux 7.1** (`securityops/kernel.scm` → `linux-securityops`): the
+  vanilla kernel.org `linux-7.1.tar.xz`, built with `customize-linux` so its
+  config is *derived from* the proven nonguix blob kernel (broad driver / Wi-Fi
+  / storage coverage preserved) and adapted to 7.1 via `make olddefconfig`. A
+  small, dependency-light set of mainline hardening options is compiled in
+  (`SLAB_FREELIST_HARDENED`, `SLAB_FREELIST_RANDOM`, `SHUFFLE_PAGE_ALLOCATOR`,
+  `HARDENED_USERCOPY`, `STACKPROTECTOR_STRONG`, `INIT_ON_ALLOC_DEFAULT_ON`,
+  `SECURITY_YAMA`, `DMESG_RESTRICT`). No lockdown / module-signature
+  enforcement — that would cripple the pentest/forensics toolset.
+- **Two selectable desktops via greetd + tuigreet** (`securityops/sessions.scm`):
+  a GL-free TUI greeter (rock-solid on any framebuffer, ideal for the no-GPU
+  path) with a session chooser and **no default — the operator picks each boot
+  (F3)**:
+  - **xmonad (X11)** — launched with `xinit` against Guix's composed
+    `xorg-wrapper`, so the vesa/fbdev fallback drivers are on the X module path
+    and the no-GPU "safe graphics" entries get a working X.
+  - **sway (Wayland)** — launched under `dbus-run-session` with
+    `WLR_RENDERER_ALLOW_SOFTWARE=1`, so it still comes up via wlroots/llvmpipe
+    on machines with no usable GPU. Full sway stack added: swaybg, swayidle,
+    swaylock, foot, wofi, waybar, mako, grim/slurp, wl-clipboard, wlr-randr,
+    xwayland.
+- **Runtime hardening & performance profile**: memory-hardening kernel cmdline
+  (`init_on_alloc=1 slab_nomerge page_alloc.shuffle=1 randomize_kstack_offset=on
+  vsyscall=none`), a sysctl profile (kptr/dmesg/ptrace/bpf restrictions, full
+  ASLR, fs protections, sane network defaults with *loose* RPF so MITM/forward
+  workflows still work; BBR + fq + zram-tuned VM), **zram** zstd swap, and
+  **earlyoom** (never sacrifices the compositor/greeter).
+- **Embedded source tree** at `/etc/securityops/src` on the running system (the
+  whole sanitised repo minus `out/` and `*.iso`), so anyone who boots the image
+  can read, tweak and rebuild this exact Guix configuration.
+- **Modular, Testament-style layout**: the kernel and the login/session
+  machinery now live in their own `(securityops …)` modules, tied together by
+  `config.scm`.
+
+### Fixed
+- **Kernel panic on boot: `VFS: Unable to mount root fs on unknown-block(0,0)`.**
+  Root-caused by reproducing the exact panic in QEMU (booting the ISO as a USB
+  device) and bisecting: the nonguix **`microcode-initrd`** prepends a ~15 MB
+  *uncompressed* early-cpio to the initramfs, and under GRUB's iso9660/i386
+  loader the kernel then receives **no main initramfs** — so it falls back to
+  mounting `root=` directly (impossible, iso9660 is a module) and panics. The
+  same kernel+initrd booted fine when loaded directly (QEMU `-kernel`/`-initrd`),
+  isolating it to the GRUB→kernel initrd hand-off. **Fix: use `base-initrd`
+  instead of `microcode-initrd`.** Verified end-to-end in QEMU: GRUB → kernel →
+  initrd → greetd → **xmonad desktop with wallpaper**.
+- The initrd also carries the USB / iso9660 / CD storage modules needed to mount
+  the live root off a raw-`dd`'d stick (`usb-storage`, `uas`, `xhci/ehci/ohci`,
+  `usbhid`, `sd-mod`, `sr-mod`, `isofs`, … appended to `%base-initrd-modules`).
+
+### Changed
+- **Login manager: SLiM → greetd/tuigreet.** SLiM cannot launch a Wayland
+  session, so it was replaced to support sway. The SecurityOps logo still
+  themes GRUB and both desktops; the graphical SLiM theme is retired (the
+  `theme/slim` assets remain in the tree but are no longer wired in).
+- The custom kernel is **not substitutable** (built from source), so the first
+  build compiles it; subsequent builds reuse it from the store.
+- **Dropped early-microcode loading** (`microcode-initrd` → `base-initrd`) — see
+  *Fixed*. The CPU runs on its firmware-resident microcode; for a live image
+  this is an acceptable trade for actually booting.
+
+### Known limitations
+- **sway needs a real GPU.** Wayland/wlroots requires KMS/DRM, which the
+  `nomodeset` "no GPU / safe graphics" entries deliberately disable (so X can use
+  vesa/fbdev) — so **use xmonad on the no-GPU entries**. sway was verified to
+  *launch* but could not be confirmed *rendering* under QEMU's emulated GPU; it
+  should work on the real Intel/AMD **GPU** boot entries. If sway misbehaves on
+  your hardware, use xmonad and capture `~/.local/share/sway/…`/journal for
+  follow-up. **xmonad is verified working on every path tested.**
+
+[1.2.0]: #120--2026-06-23
+
+## [1.1.0] — 2026-06-23
+
+Make the single ISO **boot and run on machines without a usable GPU**, and cover
+the four hardware targets explicitly: GPU Intel, GPU AMD, CPU/no-GPU Intel, and
+CPU/no-GPU AMD.
+
+### Added
+- **Two new GRUB boot entries**, bringing the menu to **five**:
+  - `SecurityOps OS — Intel CPU (no GPU / safe graphics)` — `nomodeset` +
+    `intel_iommu=on iommu=pt`, blacklists `amdgpu`/`radeon`/`nouveau`.
+  - `SecurityOps OS — AMD CPU (no GPU / safe graphics)` — `nomodeset` +
+    `amd_iommu=on iommu=pt`, blacklists `i915`/`xe`/`nouveau`.
+  With `nomodeset` the kernel stays on the plain EFI/VESA framebuffer, so
+  laptops/desktops/VMs with no dedicated GPU, an unsupported GPU, or a GPU whose
+  KMS driver hangs still boot to the xmonad desktop. Like the existing GPU
+  entries, both reuse the **exact same on-CD kernel + initrd**. (IOMMU flags are
+  vendor-ignored, so choosing the wrong Intel/AMD generic entry is harmless.)
+- **`mesa` + `mesa-utils`** in the package set. Mesa automatically selects the
+  `llvmpipe` software renderer when no hardware GL driver is present, so OpenGL
+  apps still work on the no-GPU entries; `glxinfo`/`glxgears` confirm which
+  renderer is active. (Guix's `%default-xorg-modules` already ships the
+  `xf86-video-fbdev`/`xf86-video-vesa` drivers the framebuffer path needs, so no
+  extra Xorg driver packages were required.)
+
+### Changed
+- Renamed `%gpu-menu-entries` → `%boot-menu-entries` and the `gpu-entry` helper →
+  `live-entry` (the boot menu now holds non-GPU entries too).
+- Dropped the explicit `nss-certs` from the package list — it is already part of
+  `%base-packages` on the pinned guix, which silences a duplicate-package warning.
+- README and the config header now document all five boot entries and the
+  software-rendering fallback.
+
+### Fixed
+- **The hand-written GRUB entries now actually boot.** Every non-default entry
+  (the original Intel/AMD GPU entries *and* the new no-GPU ones) is now built
+  from the image OS's own boot parameters via `operating-system-kernel-arguments`,
+  so each one carries the self-referential `root=` / `gnu.system=` / `gnu.load=`
+  tokens and locates the disc by its deterministic **fs-UUID** (`search
+  --fs-uuid`). Previously these entries (a) omitted `gnu.load=`, so the initrd
+  found no boot file and dropped to a rescue Guile REPL instead of switching
+  root, and (b) ran `search --label GUIX_IMAGE` while `build.sh` relabels the
+  volume to `SECURITYOS_LIVE`, so even finding the disc failed. Net effect: in
+  1.0.0 only the auto-detect entry was bootable; now all five boot.
+
+[1.1.0]: #110--2026-06-23
+
+## [1.0.0] — 2026-06-22
+
+First public release: a self-contained, portable live image of the securityops
+workstation.
+
+### Added
+- **`config.scm`** — a hardware-agnostic GNU Guix `operating-system` for an
+  `iso9660` live image (read-only ISO + RAM overlay via `volatile-root`).
+- **Three GRUB boot entries** so the operator picks the GPU stack at boot:
+  - `SecurityOps OS (auto-detect GPU)` — default; both `i915` and `amdgpu` load
+    by PCI ID, so it works on virtually anything.
+  - `SecurityOps OS — Intel GPU (i915)` — blacklists `amdgpu`/`radeon`, sets
+    `intel_iommu=on iommu=pt`.
+  - `SecurityOps OS — AMD GPU (amdgpu)` — blacklists `i915`/`xe`/`nouveau`, sets
+    `amd_iommu=on iommu=pt`.
+  The Intel/AMD entries are real GRUB `menu-entry` records that reuse the **exact
+  same on-CD kernel + initrd** as the default entry (derived through
+  `operating-system-for-image`), so they are guaranteed to boot.
+- **SecurityOps logo (`sec.png`) in three places**: the GRUB background
+  (`grub-theme`, 1920×1080, green-on-black menu colors), the **SLiM** login
+  screen (custom `securityops` theme), and the **xmonad** desktop (via `feh` in
+  the live user's `~/.xsession`).
+- **Hybrid BIOS + UEFI boot** (Guix builds iso9660 with `grub-mkrescue`), so the
+  single `.iso` boots on legacy and modern firmware and **drops straight into a
+  Ventoy USB folder**.
+- **nonguix stock `linux` + `linux-firmware` + dual-microcode `microcode-initrd`**
+  for broad hardware / Wi-Fi support (AMD + Intel microcode loaded early).
+- **Historical 1.0.0 credential model (insecure; removed in 1.14.0-rc.1):** the
+  live user used a reusable password and passwordless `sudo` through `wheel`.
+  Current images generate a one-boot VT1 credential, require it for sudo, and
+  lock root. The home skeleton was populated on each boot by an activation
+  service.
+- **Curated toolset** drawn from the workstation: recon/scanning (nmap, masscan,
+  arp-scan, netdiscover, fping, mtr), capture/MITM (tcpdump, wireshark,
+  macchanger, proxychains-ng, socat), wireless (aircrack-ng, reaver, kismet),
+  cracking/RE/forensics (hydra, hashcat, john-the-ripper-jumbo, radare2, rizin,
+  binwalk, exiftool), crypto/keys (gnupg, age, keepassxc, libfido2, firejail,
+  lynis, clamav), anonymity/VPN (tor, torsocks, nyx, i2pd, wireguard-tools,
+  openvpn), plus terminals (alacritty, kitty, fish+starship), editors (emacs,
+  neovim), browsers (icecat, w3m, lynx), full filesystem tooling, and the Iosevka
+  font family.
+- **`build.sh`** — wrapper around `guix system image -t iso9660` with a
+  `--pinned` (time-machine) mode for reproducible builds; sends scratch to
+  `/var/tmp` to avoid the small tmpfs `/tmp`.
+- **`channels.scm`** — `guix` + `nonguix` pinned to the workstation's June 2026
+  commits, public URLs only.
+- **`README.md`**, **`docs/SANITIZATION.md`** (what private data was stripped),
+  **`LICENSE`** (GPL-3.0-or-later).
+
+### Security / privacy
+- Stripped all host secrets and identifiers: LUKS/FS/swap UUIDs, mapped-devices,
+  the personal NextDNS resolvers, private `git.securityops.co` channel URLs, SSH
+  keys, and personal shell aliases. See `docs/SANITIZATION.md`.
+- Stateful firewall with **no addresses baked in**; plain Tor SOCKS on
+  `127.0.0.1:9050`.
+
+### Known limitations
+- Heavy source-built browsers (Tor Browser, LibreWolf, ungoogled-chromium) and
+  Mullvad are **not** in the default image to keep the build tractable; the README
+  shows how to add them from the `securityops` channel after boot.
+- Tools not yet packaged for Guix (sqlmap, nikto, bettercap, gobuster, ffuf,
+  sleuthkit, volatility3, …) are omitted; install per-engagement.
+
+[1.0.0]: #100--2026-06-22

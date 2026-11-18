@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "release": {
+    "version": "1.14.0",
+    "build_revision": "r13",
+    "desktop_label": "sway"
+  },
+  "kernel": {
+    "version": "7.3.4",
+    "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.4.tar.xz",
+    "nix_base32": "07zx81c5n6bzj29b1di3m9fbba4l96m1mds0y0grk3jy57w6s6xi",
+    "sha256": "b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f"
+  },
+  "packages": {
+    "add": [
+      "burpsuite@2026.10.1",
+      "cadcraft@0.7.0",
+      "deckcraft@0.7.0",
+      "designcraft@0.8.0",
+      "effectcraft@0.10.0",
+      "figcraft@0.6.0",
+      "filmcraft@0.7.2",
+      "gridcraft@0.7.0",
+      "guixvis@0.8.0",
+      "heroic@2.22.1",
+      "lightcraft@0.8.0",
+      "maltego@4.14.0",
+      "mirim@1.1.1",
+      "pdfcraft@0.8.0",
+      "photocraft@0.9.0",
+      "security-ops-installer2@0.1.0",
+      "securityops-guix-center@0.2.0",
+      "soundcraft@0.5.0",
+      "thunar@4.20.10",
+      "torbrowser@16.0.1",
+      "vectorcraft@0.10.0",
+      "wordcraft@0.7.0"
+    ],
+    "remove": []
+  }
+}

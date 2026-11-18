@@ -1,0 +1,27 @@
+SECURITY OPS OS COMMERCIAL LICENSING NOTICE
+
+First-party Security Ops OS image definitions, services, build scripts, and
+documentation identified by the project notice are available under either the
+GNU Affero General Public License, version 3 or any later version, or a
+separate written commercial agreement executed by the applicable copyright
+holder and licensee.
+
+THIS FILE IS NOT A COMMERCIAL LICENSE GRANT. Possession of the repository or
+an ISO gives no proprietary-use, redistribution, support, warranty, patent,
+indemnification, or trademark rights under the commercial option. Those rights
+exist only in an executed agreement that identifies its precise scope. Without
+such an agreement, the AGPL is the public grant for covered first-party files.
+
+Security Ops OS is an aggregate distribution. A commercial agreement for the
+first-party OS definition cannot and does not relicense GNU Guix, Linux,
+firmware, bootloaders, libraries, desktop components, applications, fonts,
+Evelin, Esquema, or any other separately licensed work. Each
+component retains its own license and obligations. Separate commercial
+agreements may be available for some first-party Security Ops components; one
+component's agreement does not automatically cover another.
+
+Commercial licensing inquiries: sac@securityops.co
+
+Include the intended use, distribution model, deployment scope, required
+components, and exact Security Ops OS version or commit. Never send secrets,
+credentials, private keys, or customer data.

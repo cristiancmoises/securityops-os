@@ -1,0 +1,636 @@
+#!/run/current-system/profile/bin/python3 -I
+"""Fail-closed local source validation. Never grants production/ISO approval."""
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import pwd
+import re
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.dont_write_bytecode = True
+BOOTSTRAP = ('securityops/source-selection.scm',
+             'tools/validation/securityops-validate', 'tools/validation/source-check.scm',
+             'tools/validation/test-worker.py')
+SCRIPTS = ('build.sh', 'make-iso.sh', 'securityops/installer/gen-config.sh',
+           'securityops/installer/private-state.sh', 'securityops/installer/security-ops-install')
+MODULES = ('(securityops settings)', '(securityops hardening)',
+           '(securityops kernel-config)', '(securityops source-selection)',
+           '(securityops services live-credentials)', '(securityops cells base)')
+
+
+class Blocked(Exception):
+    """Fixed reason code only; never serialize exception details or file contents."""
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def paths(names):
+    if not isinstance(names, (list, tuple)) or not 0 < len(names) <= 4096:
+        raise Blocked('INVENTORY')
+    if any(not isinstance(n, str) or not n or len(n) > 1024 or
+           any(ord(c) < 32 or ord(c) == 127 for c in n) or
+           PurePosixPath(n).is_absolute() or
+           any(p in ('', '.', '..') for p in n.split('/')) for n in names):
+        raise Blocked('PATH')
+    if len(set(names)) != len(names):
+        raise Blocked('DUPLICATE_PATH')
+    return sorted(names)
+
+
+def safe_read(root, name, limit=8*1024**2, with_mode=False, private=False):
+    paths([name])
+    # Open every component relative to anchored directory descriptors.
+    fd = None
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        components = name.split('/')
+        for component in components[:-1]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        leaf = os.open(components[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(leaf, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+                raise Blocked('SOURCE_TYPE_OR_SIZE')
+            if private and (before.st_uid != os.getuid() or stat.S_IMODE(before.st_mode) != 0o600):
+                raise Blocked('RESULT_PERMISSIONS')
+            data = stream.read(limit+1)
+            after = os.fstat(stream.fileno())
+            identity = lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_nlink,s.st_mode,s.st_uid)
+            if identity(before) != identity(after) or len(data) != before.st_size:
+                raise Blocked('SOURCE_CHANGED')
+            return (data,stat.S_IMODE(before.st_mode)) if with_mode else data
+    except OSError as error:
+        raise Blocked('SOURCE_IO') from error
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def admit(root, names, tracked):
+    names = paths(names)
+    if not set(names) <= tracked:
+        raise Blocked('UNTRACKED')
+    result, total = {}, 0
+    for name in names:
+        data,mode = safe_read(root, name, with_mode=True)
+        total += len(data)
+        if total > 64*1024**2:
+            raise Blocked('SOURCE_TOTAL_SIZE')
+        result[name] = {'sha256':digest(data), 'mode':mode}
+    return result
+
+
+def bootstrap(root, tracked):
+    return admit(root, list(BOOTSTRAP), tracked)
+
+
+def verify(root, inventory, copied=False):
+    for name,expected in inventory.items():
+        data,mode = safe_read(root, name, with_mode=True)
+        expected_mode = (0o700 if expected['mode'] & 0o111 else 0o600) if copied else expected['mode']
+        if digest(data) != expected['sha256'] or mode != expected_mode:
+            raise Blocked('SOURCE_CHANGED')
+
+
+def private_dir(path):
+    path.mkdir(mode=0o700, exist_ok=True)
+    metadata = path.lstat()
+    if (path.resolve() != path.absolute() or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
+        raise Blocked('STATE_PERMISSIONS')
+
+
+@contextmanager
+def owned_context(receipt, label, checks):
+    context = Path(tempfile.mkdtemp(prefix=label+'-', dir=receipt))
+    try:
+        yield context
+    finally:
+        # Uncertain process cleanup must not trigger deletion under a live child.
+        if all(row.get('cleanup_complete', False) for row in checks):
+            shutil.rmtree(context)
+
+
+@contextmanager
+def build_lock(root):
+    fd = directory = anchor = None
+    try:
+        anchor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory = os.open('out', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=anchor)
+        fd = os.open('.iso-build.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o600):
+            raise Blocked('LOCK_IDENTITY')
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        yield
+        current = (root/'out/.iso-build.lock').lstat()
+        if (metadata.st_dev,metadata.st_ino) != (current.st_dev,current.st_ino):
+            raise Blocked('LOCK_CHANGED')
+    except OSError as error:
+        raise Blocked('LOCK_UNAVAILABLE') from error
+    finally:
+        for descriptor in (fd, directory, anchor):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def members(pgid):
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            data = (entry/'stat').read_text().rsplit(')',1)[1].split()
+        except (FileNotFoundError,ProcessLookupError):
+            continue
+        if int(data[2]) == pgid and data[0] != 'Z':
+            found.append(int(entry.name))
+    return found
+
+
+def run_bounded(argv, cwd, environment, seconds=600, limit=16*1024**2,
+                capture=False, guard=lambda:True):
+    started = time.monotonic()
+    row = {'returncode':None, 'status':'BLOCKED', 'reason':None, 'bytes':0,
+           'cleanup_complete':True}
+    h, data, child = hashlib.sha256(), bytearray(), None
+    def cancelled(signum, frame):
+        raise KeyboardInterrupt
+    old_handlers = {s:signal.getsignal(s) for s in (signal.SIGINT,signal.SIGTERM)}
+    selector = selectors.DefaultSelector()
+    try:
+        if not guard():
+            raise Blocked('RESOURCE')
+        if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+            raise Blocked('CHILD_REAPER')
+        for sig in old_handlers:
+            signal.signal(sig, cancelled)
+        child = subprocess.Popen(argv, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+            close_fds=True, shell=False)
+        os.set_blocking(child.stdout.fileno(),False)
+        selector.register(child.stdout,selectors.EVENT_READ)
+        while True:
+            if time.monotonic()-started >= seconds:
+                raise Blocked('TIMEOUT')
+            if not guard():
+                raise Blocked('RESOURCE')
+            for key,_ in selector.select(.025):
+                chunk = os.read(key.fd,65536)
+                if chunk:
+                    row['bytes'] += len(chunk)
+                    h.update(chunk)
+                    if capture:
+                        data.extend(chunk[:max(0,limit-len(data))])
+                    if row['bytes'] > limit:
+                        raise Blocked('OUTPUT_LIMIT')
+                else:
+                    selector.unregister(key.fileobj)
+            ended = os.waitid(os.P_PID,child.pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
+            if ended is not None:
+                if members(child.pid):
+                    raise Blocked('DESCENDANTS')
+                if not selector.get_map():
+                    break
+        row['status'] = 'PASS'
+    except KeyboardInterrupt:
+        row['reason'] = 'CANCELLED'
+    except Blocked as error:
+        row['reason'] = str(error)
+    except Exception:
+        row['reason'] = 'PROCESS_IO'
+    finally:
+        # Keep the direct child unreaped until the last owned-group signal.
+        for sig in old_handlers:
+            signal.signal(sig,signal.SIG_IGN)
+        try:
+            if child is not None:
+                signalled = False
+                try:
+                    os.waitid(os.P_PID,child.pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
+                    if os.getpgid(child.pid) != child.pid:
+                        raise Blocked('CHILD_ANCHOR')
+                    os.killpg(child.pid,signal.SIGKILL)
+                    signalled = True
+                    deadline = time.monotonic()+3
+                    while members(child.pid):
+                        if time.monotonic() > deadline:
+                            raise Blocked('CLEANUP')
+                        time.sleep(.01)
+                except Exception:
+                    row['cleanup_complete'] = False
+                    row['reason'] = 'CLEANUP'
+                finally:
+                    # No further group signals occur after reaping, including
+                    # when observation failed. Uncertainty remains BLOCKED.
+                    if signalled:
+                        row['returncode'] = child.wait(timeout=3)
+        except Exception:
+            row['cleanup_complete'] = False
+            row['reason'] = 'CLEANUP'
+        finally:
+            try:
+                if child is not None:
+                    child.stdout.close()
+            except Exception:
+                row['cleanup_complete'] = False
+                row['reason'] = 'CLEANUP'
+            finally:
+                try:
+                    selector.close()
+                except Exception:
+                    row['cleanup_complete'] = False
+                    row['reason'] = 'CLEANUP'
+                finally:
+                    for sig,handler in old_handlers.items():
+                        signal.signal(sig,handler)
+    if row['reason'] is not None:
+        row['status'] = 'BLOCKED'
+    elif row['returncode'] != 0:
+        row['status'] = 'FAIL'
+    row.update(output_sha256=h.hexdigest(), elapsed_seconds=time.monotonic()-started)
+    return row,bytes(data)
+
+
+def immutable_tool(path):
+    resolved = path.resolve(strict=True) if path.exists() else None
+    if resolved is None or not resolved.is_relative_to('/gnu/store') or not os.access(resolved,os.X_OK):
+        raise Blocked('TOOL_UNAVAILABLE')
+    metadata = resolved.stat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o222:
+        raise Blocked('TOOL_MUTABLE')
+    return {'path':str(path), 'resolved':str(resolved), 'sha256':digest(resolved.read_bytes())}
+
+
+def options(args):
+    if len(args) == 1 and args[0] in ('quick','full'):
+        return args[0],None
+    if len(args) == 3 and args[0] in ('quick','full') and args[1] == '--check-tools-profile':
+        return args[0],store_item(args[2])
+    raise Blocked('ARGUMENTS')
+
+
+def invocation(args):
+    pinned = len(args) > 1 and args[1] == '--pinned-guix'
+    mode,auxiliary = options([args[0],*args[2:]] if pinned else args)
+    return mode,auxiliary,pinned
+
+
+def store_item(value):
+    if not isinstance(value,str) or re.fullmatch(
+            r'/gnu/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._-]{1,200}',value) is None:
+        raise Blocked('CHECK_TOOLS_PATH')
+    return Path(value)
+
+
+def check_tools_manifest(data):
+    # Deliberately support only the minimal v4 single-entry profile. Reject
+    # reader extensions and arbitrary fields before Guix reads the manifest.
+    if not isinstance(data,bytes) or len(data) > 65536:
+        raise Blocked('CHECK_TOOLS_MANIFEST')
+    try:
+        text = data.decode('ascii')
+    except UnicodeError as error:
+        raise Blocked('CHECK_TOOLS_MANIFEST') from error
+    if any((ord(c)<32 and c not in '\n\r\t') or ord(c)==127 for c in text):
+        raise Blocked('CHECK_TOOLS_MANIFEST')
+    text = re.sub(r'(?m)^;[^\r\n]*(?:\r?\n|$)','',text)
+    match = re.fullmatch(r'\s*\(manifest\s+\(version\s+4\)\s+\(packages\s+\(\("shellcheck"\s+'
+                         r'"([0-9][0-9A-Za-z.+_-]{0,63})"\s+"out"\s+"([^"\n]+)"\)\)\)\)\s*',text)
+    if match is None:
+        raise Blocked('CHECK_TOOLS_MANIFEST')
+    version,item = match.groups()
+    item = store_item(item)
+    if not item.name.endswith('-shellcheck-'+version):
+        raise Blocked('CHECK_TOOLS_MANIFEST')
+    return version,item
+
+
+def check_tools_records(profile, version, item, listing, closure):
+    expected = ('shellcheck\t'+version+'\tout\t'+str(item)+'\n').encode()
+    if listing != expected or not closure.endswith(b'\n'):
+        raise Blocked('CHECK_TOOLS_RECORDS')
+    try:
+        names = closure.decode('ascii').split('\n')[:-1]
+    except UnicodeError as error:
+        raise Blocked('CHECK_TOOLS_RECORDS') from error
+    if not 1 <= len(names) <= 4096 or len(names) != len(set(names)):
+        raise Blocked('CHECK_TOOLS_RECORDS')
+    for name in names:
+        store_item(name)
+    if not {str(profile),str(item)} <= set(names):
+        raise Blocked('CHECK_TOOLS_RECORDS')
+    return sorted(names)
+
+
+def store_manifest(profile):
+    fd = os.open(profile/'manifest',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or
+                before.st_mode & 0o222 or before.st_size > 65536):
+            raise Blocked('CHECK_TOOLS_MANIFEST_IDENTITY')
+        data = stream.read(65537)
+        after = os.fstat(stream.fileno())
+        identity = lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+        if identity(before) != identity(after) or len(data) != before.st_size:
+            raise Blocked('CHECK_TOOLS_CHANGED')
+        return data,identity(before)
+
+
+def check_tools_profile(profile, guix, run):
+    profile = store_item(str(profile))
+    if not profile.name.endswith('-profile') or profile.resolve(strict=True) != profile:
+        raise Blocked('CHECK_TOOLS_PROFILE')
+    metadata = profile.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o222:
+        raise Blocked('CHECK_TOOLS_PROFILE')
+    data,identity = store_manifest(profile)
+    version,item = check_tools_manifest(data)
+    listing = run('check-tools-packages',[guix,'package','--profile='+str(profile),'--list-installed'],
+                  capture=True,seconds=30)
+    closure = run('check-tools-closure',[guix,'gc','--requisites',str(profile)],capture=True,seconds=30)
+    names = check_tools_records(profile,version,item,listing,closure)
+    tool = immutable_tool(profile/'bin/shellcheck')
+    if tool['resolved'] != str(item/'bin/shellcheck'):
+        raise Blocked('CHECK_TOOLS_EXECUTABLE_MISMATCH')
+    if store_manifest(profile) != (data,identity):
+        raise Blocked('CHECK_TOOLS_CHANGED')
+    return tool,{'profile':str(profile),'manifest_sha256':digest(data), 'manifest_identity':identity,
+                 'package':'shellcheck','version':version,'item':str(item),'requisites':names,
+                 'upstream_authentication_claimed':False}
+
+
+def base_tools(profiles, auxiliary=False):
+    tools = {}
+    for name in ('git','python3','bash','shellcheck','guile','guild','guix'):
+        if name == 'shellcheck' and auxiliary:
+            continue
+        path = next((p/'bin'/name for p in profiles if (p/'bin'/name).exists()),None)
+        if path is None:
+            raise Blocked('TOOL_UNAVAILABLE_'+name.upper())
+        tools[name] = immutable_tool(path)
+    return tools
+
+
+def pinned_result(context):
+    data = safe_read(context,'profile',1024,private=True)
+    if not data.endswith(b'\n') or data.count(b'\n') != 1:
+        raise Blocked('PINNED_RESULT')
+    try:
+        profile = store_item(data[:-1].decode('ascii'))
+    except (UnicodeError,Blocked) as error:
+        raise Blocked('PINNED_RESULT') from error
+    if not profile.name.endswith('-profile') or profile.resolve(strict=True) != profile:
+        raise Blocked('PINNED_PROFILE')
+    metadata = profile.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o222:
+        raise Blocked('PINNED_PROFILE')
+    manifest,identity = store_manifest(profile)
+    tool = immutable_tool(profile/'bin/guix')  # No system-profile Guix fallback.
+    return profile,{'profile':str(profile), 'manifest_sha256':digest(manifest),
+                    'manifest_identity':identity, 'guix':tool,
+                    'channel_metadata_match':True, 'upstream_authentication_claimed':False}
+
+
+def resolve_pinned(root, tracked, guix, run, context):
+    inputs = admit(root,['channels.guix','tools/validation/pinned-guix.scm'],tracked)
+    for name in inputs:
+        target = context/name
+        target.parent.mkdir(parents=True,exist_ok=True)
+        with target.open('xb') as stream:
+            stream.write(safe_read(root,name))
+        target.chmod(0o600)
+    verify(root,inputs)
+    verify(context,inputs,copied=True)
+    run('pinned-guix-resolve',[guix,'time-machine','-C',str(context/'channels.guix'),
+        '--substitute-urls=https://substitutes.securityops.com.br https://ci.guix.gnu.org',
+        '--fallback','--','repl','-q','--',str(context/'tools/validation/pinned-guix.scm'),
+        str(context/'channels.guix'),str(context/'profile')],seconds=600)
+    verify(root,inputs)
+    verify(context,inputs,copied=True)
+    profile,record = pinned_result(context)
+    record['inputs'] = inputs
+    return profile,record
+
+
+def test_status(value):
+    fields = ('tests','failures','errors','skipped')
+    if (not isinstance(value,dict) or set(value) != {'check',*fields} or value.get('check') != 'unittest' or
+            any(type(value.get(k)) is not int or value[k] < 0 for k in fields)):
+        return 'BLOCKED'
+    if value['skipped'] or not value['tests']:
+        return 'BLOCKED'
+    return 'FAIL' if value['failures'] or value['errors'] else 'PASS'
+
+
+def worker_status(row, counts):
+    status = test_status(counts)
+    if row['status'] == 'BLOCKED' or not row['cleanup_complete'] or status == 'BLOCKED':
+        return 'BLOCKED'
+    if row['returncode'] != 0 or row['status'] != 'PASS':
+        return 'FAIL'
+    return status
+
+
+def require_full_checks(checks):
+    full = [row for row in checks if row.get('check') in ('full-a','full-b')]
+    if ([row['check'] for row in full] != ['full-a','full-b'] or checks[-2:] != full or
+            any(row.get('status') != 'PASS' or type(row.get('returncode')) is not int or
+                row['returncode'] != 0 or row.get('cleanup_complete') is not True for row in full)):
+        raise Blocked('FULL_CHECKS_INCOMPLETE')
+
+
+def resources(root):
+    checked = set()
+    for path in (root,Path('/gnu/store')):
+        device = path.stat().st_dev
+        if device not in checked and shutil.disk_usage(path).free < 20*1024**3:
+            return False
+        checked.add(device)
+    available = next(line for line in Path('/proc/meminfo').read_text().splitlines()
+                     if line.startswith('MemAvailable:'))
+    return int(available.split()[1])*1024 >= 2*1024**3
+
+
+def environment(profiles, context, seed):
+    for name in ('home','tmp','runtime'):
+        private_dir(context/name)
+    return {'HOME':str(context/'home'), 'TMPDIR':str(context/'tmp'),
+            'XDG_RUNTIME_DIR':str(context/'runtime'), 'LANG':'C.UTF-8', 'LC_ALL':'C.UTF-8',
+            'PATH':':'.join(str(p/'bin') for p in profiles), 'PYTHONHASHSEED':str(seed),
+            'GUILE_AUTO_COMPILE':'0',
+            'GUILE_LOAD_PATH':':'.join(str(p/'share/guile/site/3.0') for p in profiles),
+            'GUILE_LOAD_COMPILED_PATH':':'.join(str(p/'lib/guile/3.0/site-ccache') for p in profiles),
+            'GUILE_EXTENSIONS_PATH':str(profiles[-1]/'lib/guile/3.0/extensions'),
+            'GIT_CONFIG_NOSYSTEM':'1', 'GIT_CONFIG_GLOBAL':'/dev/null', 'GIT_TERMINAL_PROMPT':'0'}
+
+
+def main(root, args):
+    try:
+        requested_mode,auxiliary,pinned = invocation(args)
+    except Blocked:
+        print('usage: securityops-validate {quick|full} [--pinned-guix] [--check-tools-profile /gnu/store/...-profile]')
+        return 2
+    os.umask(0o077)
+    report = {'mode':requested_mode, 'status':'BLOCKED', 'checks':[],
+              'production_gate_approved':False, 'iso_release_allowed':False}
+    receipt = None
+    try:
+        root = root.absolute()
+        if root.resolve() != root:
+            raise Blocked('ROOT_ALIAS')
+        state = root/'.dsh/state'
+        if state.parent.is_symlink():
+            raise Blocked('STATE_ALIAS')
+        private_dir(state)
+        receipt = Path(tempfile.mkdtemp(prefix='validation-',dir=state))
+        system = Path('/run/current-system/profile').resolve(strict=True)
+        current = (Path(pwd.getpwuid(os.getuid()).pw_dir)/'.config/guix/current').resolve(strict=True)
+        if not all(p.is_relative_to('/gnu/store') for p in (current,system)):
+            raise Blocked('PROFILE')
+        profiles = (current,system)
+        tools = base_tools(profiles,auxiliary=auxiliary is not None)
+        report['tools'] = tools
+        active_env = environment(profiles,receipt,6134)
+        def run(name, argv, cwd=root, env=None, capture=False, seconds=600, required=True):
+            row,data = run_bounded(argv,cwd,active_env if env is None else env,seconds=seconds,capture=capture,
+                                   guard=lambda:resources(root))
+            report['checks'].append(dict(check=name, argv=argv, **row))
+            if not row['cleanup_complete']:
+                raise Blocked('CHECK_CLEANUP')
+            if row['status'] == 'BLOCKED' or (required and row['status'] != 'PASS'):
+                raise Blocked('CHECK_'+row['status'])
+            return data
+        if auxiliary is not None:
+            tools['shellcheck'],report['check_tools_profile'] = check_tools_profile(auxiliary,tools['guix']['path'],run)
+        gitbase = [tools['git']['path'],'-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null']
+        def git(*argv, cwd=root):
+            return run('git',gitbase+['-C',str(cwd),*argv],capture=True)
+        if git('check-ignore','--','.dsh/state/probe').strip() != b'.dsh/state/probe':
+            raise Blocked('STATE_NOT_IGNORED')
+        tracked = set(git('ls-files','-z').decode().rstrip('\0').split('\0'))
+        bootstrap(root,tracked)
+        report['head'] = git('rev-parse','HEAD').decode().strip()
+        report['tree'] = git('rev-parse','HEAD^{tree}').decode().strip()
+        def selected(source, active_env):
+            data = run('source-selection',[tools['guile']['path'],'--no-auto-compile','-L',str(source),
+                '-s',str(source/'tools/validation/source-check.scm'),str(source)],env=active_env,capture=True)
+            return paths(json.loads(data))
+        with build_lock(root):
+            if pinned:
+                report['bootstrap_tools'] = dict(tools)
+                with owned_context(receipt,'pinned',report['checks']) as context:
+                    profile,report['pinned_guix'] = resolve_pinned(root,tracked,tools['guix']['path'],run,context)
+                profiles = (profile,system)
+                selected_tools = base_tools(profiles,auxiliary=auxiliary is not None)
+                if auxiliary is not None:
+                    selected_tools['shellcheck'] = tools['shellcheck']
+                tools = selected_tools
+                report['tools'] = tools
+                active_env = environment(profiles,receipt,6134)
+                gitbase[0] = tools['git']['path']
+            image_names = selected(root,active_env)
+            extra = [n for n in tracked if n.startswith(('tests/','tools/validation/'))]
+            pinned_inputs = report.get('pinned_guix',{}).get('inputs',{})
+            inventory = admit(root,sorted(set(image_names)|set(extra)|set(BOOTSTRAP)|set(pinned_inputs)),tracked)
+            if any(inventory.get(name) != expected for name,expected in pinned_inputs.items()):
+                raise Blocked('PINNED_INPUT_CHANGED')
+            report['source_digest'] = digest(json.dumps(inventory,sort_keys=True).encode())
+            report['source_files'] = len(inventory)
+            for label,seed in (('a',6134),('b',4921)):
+                with owned_context(receipt,label,report['checks']) as context:
+                    fresh_env = environment(profiles,context,seed)
+                    source = context/'source'
+                    for origin,destination,entries in ((root,source,inventory),):
+                        for name,expected in entries.items():
+                            data,file_mode = safe_read(origin,name,with_mode=True)
+                            if digest(data) != expected['sha256'] or file_mode != expected['mode']:
+                                raise Blocked('SOURCE_CHANGED')
+                            target = destination/name
+                            target.parent.mkdir(parents=True,exist_ok=True)
+                            target.write_bytes(data)
+                            target.chmod(0o700 if file_mode & 0o111 else 0o600)
+                    worker_result = context/'tests.json'
+                    # -I implies -E and would ignore the explicit A/B hash seeds.
+                    # Admit only the constructed environment; disable site startup,
+                    # user site, unsafe path prepends and bytecode independently.
+                    run(label+'-tests',[tools['python3']['path'],'-s','-P','-B','-S',str(source/'tools/validation/test-worker.py'),
+                                       str(source),str(worker_result)],cwd=source,env=fresh_env,required=False)
+                    counts = json.loads(safe_read(context,'tests.json',4096))
+                    if test_status(counts) != 'BLOCKED':
+                        report[label+'-tests'] = counts
+                    elif isinstance(counts,dict) and set(counts) == {'check','tests','failures','errors','skipped'}:
+                        # Do not persist arbitrary worker strings or nested data.
+                        if counts.get('check') == 'unittest' and all(type(counts[k]) is int for k in ('tests','failures','errors','skipped')):
+                            report[label+'-tests'] = counts
+                    status = worker_status(report['checks'][-1],counts)
+                    report['checks'][-1]['test_status'] = status
+                    if status != 'PASS':
+                        raise Blocked('TEST_'+status)
+                    for tool,flags in (('bash',['-n']),('shellcheck',[])):
+                        # Bash treats extra filenames as arguments to the first.
+                        groups = ((script,) for script in SCRIPTS) if tool == 'bash' else (SCRIPTS,)
+                        for index,scripts in enumerate(groups,1):
+                            check_name = label+'-'+tool+('-'+str(index) if tool == 'bash' else '')
+                            run(check_name,[tools[tool]['path'],*flags,*scripts],cwd=source,env=fresh_env)
+                    for action in ('validate','doctor'):
+                        run(label+'-'+action,[tools['python3']['path'],'-I','-B',str(source/'securityopsctl'),action],
+                            cwd=source,env=fresh_env)
+                    run(label+'-whitespace',gitbase+['-C',str(root),'diff','--check'])
+                    if label == 'b':
+                        run('b-modules',[tools['guile']['path'],'--no-auto-compile','-L',str(source),
+                            '-c','(use-modules '+' '.join(MODULES)+')'],cwd=source,env=fresh_env)
+                        if selected(source,fresh_env) != image_names:
+                            raise Blocked('SOURCE_SELECTION_CHANGED')
+                    verify(source,inventory,copied=True)
+                    verify(root,inventory)
+        if requested_mode == 'full':
+            for label,seed in (('full-a',8123),('full-b',9731)):
+                with owned_context(receipt,label,report['checks']) as context:
+                    fresh_env = environment(profiles,context,seed)
+                    verify(root,inventory)
+                    run(label,[tools['python3']['path'],'-I','-B',str(root/'securityopsctl'),'validate','--full'],
+                        env=fresh_env,seconds=1800)
+                    verify(root,inventory)
+        if report['mode'] != requested_mode:
+            raise Blocked('MODE_CHANGED')
+        if report['mode'] == 'full':
+            require_full_checks(report['checks'])
+        report['status'] = 'PASS'
+    except Blocked as error:
+        report['reason'] = str(error)
+        if str(error) in ('CHECK_FAIL','TEST_FAIL'):
+            report['status'] = 'FAIL'
+    except KeyboardInterrupt:
+        report['reason'] = 'CANCELLED'
+    except (OSError,ValueError,StopIteration):
+        report['reason'] = 'PREREQUISITE_IO'
+    if receipt is not None:
+        data = json.dumps(report,sort_keys=True,indent=2).encode()+b'\n'
+        if len(data) > 2*1024**2:
+            raise Blocked('RECEIPT_LIMIT')
+        with (receipt/'result.json').open('xb') as stream:
+            stream.write(data)
+        print(str(receipt/'result.json'))
+    print(report['status']+': '+report.get('reason','source checks only; no production approval'))
+    return {'PASS':0,'FAIL':1,'BLOCKED':2}[report['status']]
+
+
+if __name__ == '__main__':
+    raise SystemExit(main(Path(__file__).absolute().parents[2],sys.argv[1:]))

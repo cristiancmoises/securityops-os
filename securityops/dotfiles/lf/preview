@@ -1,0 +1,361 @@
+#!/bin/sh
+set -e
+
+# Exit if no arguments
+[ -z "$1" ] && exit 0
+
+# --- Cleaner: remove previous preview and old cache ---
+ANIM_DIR="$HOME/.cache/lf"
+mkdir -p "$ANIM_DIR"
+
+# Per-session state. The FIFO is per lf-session (.../ueberzug-<pid>); key the
+# animation pid/token on the SAME session so two lf windows never kill each
+# other's cyclers.
+SID="${FIFO_UEBERZUG##*/ueberzug-}"
+case "$SID" in ''|"$FIFO_UEBERZUG") SID="nofifo" ;; esac
+PID_FILE="$ANIM_DIR/anim.$SID.pid"
+TOKEN_FILE="$ANIM_DIR/anim.$SID.token"
+
+# Bounded write to the ueberzugpp FIFO: if the reader (ueberzugpp) has died, a
+# plain '> fifo' blocks forever in open(2); timeout caps that.
+fifo_send() {  # JSON on stdin
+    [ -n "$FIFO_UEBERZUG" ] && [ -p "$FIFO_UEBERZUG" ] || return 1
+    timeout 2 sh -c 'cat > "$1"' _ "$FIFO_UEBERZUG" 2>/dev/null
+}
+
+# Stop the animated frame-cycler and WAIT for it to die. The wait matters:
+# without it an in-flight "add" can land AFTER our "remove" and the old
+# animation sticks on top of every later preview.
+stop_animation() {
+    rm -f "$TOKEN_FILE"              # invalidate: loop self-exits before next frame
+    if [ -f "$PID_FILE" ]; then
+        _apid=$(cat "$PID_FILE" 2>/dev/null)
+        rm -f "$PID_FILE"
+        if [ -n "$_apid" ] && kill -0 "$_apid" 2>/dev/null; then
+            kill "$_apid" 2>/dev/null
+            _i=0
+            while [ "$_i" -lt 8 ] && kill -0 "$_apid" 2>/dev/null; do
+                sleep 0.03
+                _i=$((_i + 1))
+            done
+        fi
+    fi
+}
+
+cleanup_preview() {
+    stop_animation
+    printf '{"action":"remove","identifier":"PREVIEW"}\n' | fifo_send
+    # reap orphaned extraction temp dirs + old cached frames
+    find "$ANIM_DIR" -maxdepth 1 -name 'ex.*' -mmin +5 -exec rm -rf {} + 2>/dev/null
+    find "$ANIM_DIR" -mindepth 1 -mtime +2 -delete 2>/dev/null
+}
+
+if [ "$1" = "clear" ]; then
+    cleanup_preview
+    exit 0
+fi
+
+# --- Image preview function ---
+image() {
+    cleanup_preview
+    if [ -n "$FIFO_UEBERZUG" ] && [ -p "$FIFO_UEBERZUG" ] && command -v ueberzugpp >/dev/null 2>&1; then
+        sleep 0.03
+        printf '{"action": "add", "identifier": "PREVIEW", "x": "%s", "y": "%s", "width": "%s", "height": "%s", "scaler": "contain", "path": "%s"}\n' \
+            "$4" "$5" "$(($2-1))" "$(($3-1))" "$1" | fifo_send
+        exit 1
+    elif command -v chafa >/dev/null 2>&1; then
+        if [[ "$1" == *.gif ]]; then
+            chafa --animate=on --size="$4x$5" "$1" 2>/dev/null || echo "Failed to preview GIF"
+        else
+            chafa --format=auto --size="$4x$5" "$1" 2>/dev/null || echo "Failed to preview image"
+        fi
+    else
+        echo "No image previewer (ueberzugpp or chafa) found."
+        exit 1
+    fi
+}
+
+# --- Animated GIF / WebP / video: loop extracted frames in the pane (ueberzugpp) ---
+# Frames are extracted ONCE (downscaled to <=800px, capped at 80 frames, with
+# timeouts so huge files can't hang the pane) into a cache dir; a background
+# cycler then feeds them to the running ueberzugpp at the media's real frame
+# delay. The cycler stops when: its pid is killed AND waited on (stop_animation),
+# its token is invalidated by any newer preview/cleaner, the FIFO disappears
+# (lf quit), or a FIFO write fails.
+
+extract_frames() {  # $1 = source file, $2 = framedir, $3 = kind (gif|other)
+    if [ "$3" = "gif" ]; then
+        # ffmpeg decodes gif (incl. disposal) far faster than ImageMagick
+        timeout 8 nice -n 19 ffmpeg -y -i "$1" \
+            -vf "scale='min(800,iw)':-2:flags=lanczos" -fps_mode vfr -frames:v 80 \
+            "$2/f_%05d.png" >/dev/null 2>&1 \
+        || timeout 10 nice -n 19 convert "$1"'[0-79]' -coalesce -resize '800x800>' \
+            "$2/f_%05d.png" >/dev/null 2>&1 || true
+    else
+        # webp/apng: ImageMagick first (ffmpeg cannot decode animated webp)
+        timeout 10 nice -n 19 convert "$1"'[0-79]' -coalesce -resize '800x800>' \
+            "$2/f_%05d.png" >/dev/null 2>&1 \
+        || timeout 8 nice -n 19 ffmpeg -y -i "$1" \
+            -vf "scale='min(800,iw)':-2:flags=lanczos" -fps_mode vfr -frames:v 80 \
+            "$2/f_%05d.png" >/dev/null 2>&1 || true
+    fi
+}
+
+get_delay() {  # $1 = media file; echoes per-frame delay in seconds
+    _d=$(timeout 3 identify -format '%T\n' "$1" 2>/dev/null \
+         | awk 'NR<=60 && $1 ~ /^[0-9]+$/ {s+=$1; n++} END{if(n>0) printf "%d", s/n; else print 9}')
+    case "$_d" in ''|*[!0-9]*) _d=9 ;; esac
+    [ "$_d" -lt 2 ] && _d=9      # 0/1cs means "browser default" (~10cs)
+    [ "$_d" -lt 4 ] && _d=4      # bound the redraw rate at 25fps
+    [ "$_d" -gt 30 ] && _d=30
+    awk -v c="$_d" 'BEGIN{printf "%.3f", c/100}'
+}
+
+animate_frames() {  # $1 framedir, $2 delay(s), $3 w, $4 h, $5 x, $6 y
+    stop_animation
+    _tok="$SID-$$-$(date +%s%N 2>/dev/null || date +%s)"
+    printf '%s\n' "$_tok" > "$TOKEN_FILE"
+    (
+        set +e
+        # Record OUR OWN pid (BASHPID = this subshell) so there is no spawn/record
+        # race if lf SIGKILLs the previewer, and remove it on exit so no stale pid
+        # can be recycle-killed later.
+        echo "$BASHPID" > "$PID_FILE" 2>/dev/null
+        trap 'rm -f "$PID_FILE" 2>/dev/null' EXIT
+        trap 'exit 0' TERM INT HUP
+        # One persistent write fd: no per-frame open() (fast) and a dead reader
+        # becomes an EPIPE on write instead of a blocked open().
+        exec 4>"$FIFO_UEBERZUG" 2>/dev/null || exit 0
+        while :; do
+            for fr in "$1"/f_*.png; do
+                IFS= read -r _cur 2>/dev/null < "$TOKEN_FILE" || exit 0
+                [ "$_cur" = "$_tok" ] || exit 0
+                printf '{"action":"add","identifier":"PREVIEW","x":"%s","y":"%s","width":"%s","height":"%s","scaler":"contain","path":"%s"}\n' \
+                    "$5" "$6" "$(($3 - 1))" "$(($4 - 1))" "$fr" >&4 2>/dev/null || exit 0
+                sleep "$2"
+            done
+        done
+    ) &
+    exit 1
+}
+
+animate_media() {  # $1 file, $2 w, $3 h, $4 x, $5 y   (gif/webp/apng)
+    framedir="${CACHE}.frames"
+    if [ ! -f "$framedir/.done" ]; then
+        case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+            *.gif) _kind=gif ;;
+            *)     _kind=other ;;
+        esac
+        # Extract into a private temp dir, then atomically swap in. An orphaned
+        # extractor from a SIGKILLed previewer writes to its OWN temp, so it can
+        # never corrupt a concurrent re-extraction of the same file.
+        _tmp=$(mktemp -d "$ANIM_DIR/ex.XXXXXX" 2>/dev/null) || _tmp="$framedir.$$.tmp"
+        mkdir -p "$_tmp"
+        extract_frames "$1" "$_tmp" "$_kind"
+        if ls "$_tmp"/f_*.png >/dev/null 2>&1; then
+            : > "$_tmp/.done"
+            rm -rf "$framedir" 2>/dev/null
+            mv "$_tmp" "$framedir" 2>/dev/null || rm -rf "$_tmp"
+        else
+            rm -rf "$_tmp"
+        fi
+    fi
+    nframes=$(ls "$framedir"/f_*.png 2>/dev/null | wc -l)
+    if [ "$nframes" -eq 0 ]; then
+        image "$1" "$2" "$3" "$4" "$5"       # extraction failed -> plain image
+        return
+    fi
+    first=$(ls "$framedir"/f_*.png 2>/dev/null | head -n 1)
+    if [ "$nframes" -eq 1 ] || [ -z "$FIFO_UEBERZUG" ] || [ ! -p "$FIFO_UEBERZUG" ]; then
+        image "$first" "$2" "$3" "$4" "$5"   # static file, or no overlay available
+        return
+    fi
+    if [ -f "$framedir/.delay" ]; then
+        delay=$(cat "$framedir/.delay" 2>/dev/null)
+    else
+        delay=$(get_delay "$1")
+        printf '%s\n' "$delay" > "$framedir/.delay"
+    fi
+    case "$delay" in ''|*[!0-9.]*) delay=0.09 ;; esac
+    animate_frames "$framedir" "$delay" "$2" "$3" "$4" "$5"
+}
+
+animate_video() {  # $1 file, $2 w, $3 h, $4 x, $5 y
+    framedir="${CACHE}.vframes"
+    if [ ! -f "$framedir/.done" ]; then
+        _tmp=$(mktemp -d "$ANIM_DIR/ex.XXXXXX" 2>/dev/null) || _tmp="$framedir.$$.tmp"
+        mkdir -p "$_tmp"
+        timeout 8 nice -n 19 ffmpeg -y -ss 1 -t 4 -i "$1" \
+            -vf "fps=8,scale='min(720,iw)':-2" -frames:v 32 "$_tmp/f_%05d.png" >/dev/null 2>&1 || true
+        if [ -z "$(ls "$_tmp"/f_*.png 2>/dev/null)" ]; then   # very short clip: from start
+            timeout 8 nice -n 19 ffmpeg -y -t 4 -i "$1" \
+                -vf "fps=8,scale='min(720,iw)':-2" -frames:v 32 "$_tmp/f_%05d.png" >/dev/null 2>&1 || true
+        fi
+        : > "$_tmp/.done"
+        rm -rf "$framedir" 2>/dev/null
+        mv "$_tmp" "$framedir" 2>/dev/null || rm -rf "$_tmp"
+    fi
+    vframes=$(ls "$framedir"/f_*.png 2>/dev/null | wc -l)
+    if [ "$vframes" -ge 2 ] && [ -n "$FIFO_UEBERZUG" ] && [ -p "$FIFO_UEBERZUG" ]; then
+        animate_frames "$framedir" 0.125 "$2" "$3" "$4" "$5"     # exits 1
+    fi
+    # Static thumbnail fallback (previous behaviour, now with timeouts)
+    if [ ! -f "${CACHE}.jpg" ]; then
+        timeout 6 ffmpegthumbnailer -i "$1" -o "${CACHE}.jpg" -s 1024 -q 8 >/dev/null 2>&1 \
+          || timeout 6 ffmpeg -y -ss 3 -i "$1" -vframes 1 -vf 'scale=1024:-1' "${CACHE}.jpg" >/dev/null 2>&1 \
+          || timeout 6 ffmpeg -y -i "$1" -vframes 1 -vf 'scale=1024:-1' "${CACHE}.jpg" >/dev/null 2>&1
+    fi
+    if [ -f "${CACHE}.jpg" ]; then
+        image "${CACHE}.jpg" "$2" "$3" "$4" "$5"
+    else
+        echo "Failed to generate video preview (ffmpegthumbnailer/ffmpeg)"
+    fi
+}
+
+# --- Text preview helper ---
+batorcat() {
+    file="$1"
+    shift
+    if command -v bat >/dev/null 2>&1; then
+        bat --color=always --style=plain --paging=never \
+            --wrap=character --terminal-width="$((COLUMNS-2))" "$file" "$@" | head -n 120
+    else
+        fold -w "$((COLUMNS-2))" "$file" | head -n 120
+    fi
+}
+
+# --- Cache filename for thumbnails ---
+CACHE="$HOME/.cache/lf/thumbnail.$(stat --printf '%n\0%i\0%F\0%s\0%W\0%Y' -- "$(readlink -f "$1")" | sha256sum | awk '{print $1}')"
+
+# --- Call cleanup before every preview ---
+cleanup_preview
+
+# --- File type dispatch ---
+case "$(printf "%s\n" "$(readlink -f "$1")" | awk '{print tolower($0)}')" in
+    *.jpg|*.jpeg|*.png|*.bmp|*.xpm|*.jfif)
+        image "$1" "$2" "$3" "$4" "$5"
+        ;;
+    *.gif|*.webp|*.apng)
+        # Animated GIF / WebP / APNG -> loop the frames live in the pane.
+        # Static gif/webp fall back to a single still frame automatically.
+        animate_media "$1" "$2" "$3" "$4" "$5"
+        ;;
+    *.svg)
+        [ ! -f "${CACHE}.jpg" ] && convert -background white -flatten "$1" "${CACHE}.jpg" 2>/dev/null || echo "Failed to convert SVG"
+        image "${CACHE}.jpg" "$2" "$3" "$4" "$5"
+        ;;
+    *.pdf)
+        [ ! -f "${CACHE}.jpg" ] && pdftoppm -jpeg -f 1 -singlefile -scale-to 1024 "$1" "$CACHE" 2>/dev/null || echo "Failed to generate PDF thumbnail"
+        image "${CACHE}.jpg" "$2" "$3" "$4" "$5"
+        ;;
+    *.mp4|*.mkv|*.webm|*.avi|*.mov|*.flv|*.wmv|*.m4v|*.mpg|*.mpeg|*.ts|*.m2ts|*.ogv)
+        # VIDEO -> animated preview (first ~4s at 8fps, cached); falls back to a
+        # static thumbnail if frame extraction fails.
+        animate_video "$1" "$2" "$3" "$4" "$5"
+        ;;
+    *.cbz|*.cbr|*.cbt)
+        [ ! -f "${CACHE}.jpg" ] && comicthumb "$1" "${CACHE}.jpg" 1024 2>/dev/null || echo "Failed to generate comic thumbnail"
+        image "${CACHE}.jpg" "$2" "$3" "$4" "$5"
+        ;;
+    *.epub)
+        [ ! -f "${CACHE}.jpg" ] && epub-thumbnailer "$1" "${CACHE}.jpg" 1024 2>/dev/null || echo "Failed to generate EPUB thumbnail"
+        image "${CACHE}.jpg" "$2" "$3" "$4" "$5"
+        ;;
+    *.odt)
+        if command -v odt2txt >/dev/null 2>&1; then
+            odt2txt "$1" | head -n 120
+        else
+            echo "ODT preview requires odt2txt."
+        fi
+        ;;
+    *.xlsx)
+        if command -v xlsx2csv >/dev/null 2>&1; then
+            xlsx2csv "$1" | head -n 120
+        else
+            echo "XLSX preview requires xlsx2csv."
+        fi
+        ;;
+    *.pptx)
+        if command -v python3 >/dev/null 2>&1 && python3 -c "import pptx" 2>/dev/null; then
+            python3 -c "from pptx import Presentation; [print(t) for s in Presentation('$1').slides for t in [p.text for p in s.shapes if hasattr(p, 'text')]]" | head -n 120
+        else
+            echo "PPTX preview requires python-python-pptx."
+        fi
+        ;;
+    *.html)
+        if command -v w3m >/dev/null 2>&1; then
+            w3m -dump "$1" | head -n 120
+        else
+            echo "HTML preview requires w3m."
+        fi
+        ;;
+    *.csv)
+        if command -v csvtool >/dev/null 2>&1; then
+            csvtool readable "$1" | head -n 120
+        else
+            batorcat "$1" --language=csv
+        fi
+        ;;
+    *.rtf)
+        if command -v unrtf >/dev/null 2>&1; then
+            unrtf --text "$1" | head -n 120
+        else
+            echo "RTF preview requires unrtf."
+        fi
+        ;;
+    *.doc|*.docx)
+        if command -v catdoc >/dev/null 2>&1; then
+            catdoc "$1" | head -n 120
+        elif command -v pandoc >/dev/null 2>&1; then
+            pandoc -t plain "$1" | head -n 120
+        else
+            echo "DOC/DOCX preview requires catdoc or pandoc."
+        fi
+        ;;
+    *.tex)
+        if command -v pandoc >/dev/null 2>&1; then
+            pandoc -t plain "$1" | head -n 120
+        else
+            batorcat "$1" --language=tex
+        fi
+        ;;
+    *.org)
+        if command -v pandoc >/dev/null 2>&1; then
+            pandoc -t plain "$1" | head -n 120
+        else
+            batorcat "$1" --language=org
+        fi
+        ;;
+    *.ipynb)
+        if command -v jupyter >/dev/null 2>&1; then
+            jupyter nbconvert --to markdown "$1" --stdout | head -n 120
+        else
+            echo "IPYNB preview requires jupyter."
+        fi
+        ;;
+    *.zip|*.tar|*.tar.gz|*.tar.bz2|*.tar.xz|*.rar|*.7z)
+        if command -v atool >/dev/null 2>&1; then
+            atool --list "$1" | head -n 120
+        elif command -v unzip >/dev/null 2>&1 && [[ "$1" == *.zip ]]; then
+            unzip -l "$1" | head -n 120
+        elif command -v 7z >/dev/null 2>&1 && [[ "$1" == *.7z ]]; then
+            7z l "$1" | head -n 120
+        else
+            echo "Archive preview requires atool, unzip, or 7z."
+        fi
+        ;;
+    *.json|*.scm|*.bat|*.xml|*.yaml|*.yml|*.toml|*.ini|*.conf|*.log|*.lua|*.go|*.rs|*.rb|*.pl|*.php|*.ts|*.tsx|*.jsx)
+        batorcat "$1" --language="${1##*.}"
+        ;;
+    *.md|*.txt|*.sh|*.py|*.c|*.cpp|*.java|*.js|*.css)
+        batorcat "$1" --language="${1##*.}"
+        ;;
+    *)
+        if file --mime-type "$1" | grep -q text; then
+            batorcat "$1"
+        else
+            file -b "$1"
+        fi
+    ;;
+esac
+exit 0

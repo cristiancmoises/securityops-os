@@ -1,0 +1,47 @@
+Security Ops OS licensing notice
+================================
+
+Copyright (C) Cristian Cezar Moisés, plus other copyright holders identified
+by individual file and component notices.
+
+The first-party Security Ops OS image definition—its original `(securityops
+...)` modules, configuration, services, build/release scripts, installer code,
+tests, and documentation—is available under either:
+
+  AGPL-3.0-or-later OR LicenseRef-Security-Ops-OS-Commercial
+
+Exceptions: securityops/installer/cow-system-init.scm and
+securityops/bootloader.scm are narrow derivatives of GNU Guix installer and
+bootloader code and are GPL-3.0-or-later only. No Security Ops commercial
+option is asserted for upstream-derived rights in those files.
+
+The complete public AGPL text is in LICENSE and LICENSE-AGPL-3.0.
+LICENSE-COMMERCIAL is an inquiry/scope notice, not a commercial license grant.
+A commercial option exists only through a separate written agreement executed
+by the applicable copyright holder and licensee.
+
+The ISO is an aggregate distribution. Packaged and bundled components retain
+their upstream licenses. A Security Ops OS agreement does not relicense GNU
+Guix, Linux, firmware, bootloaders, desktop components, libraries,
+applications, fonts, or separately maintained Security Ops tools.
+
+The inspected local Evelin, VaptVupt, libvuptsdk, Mirim, and
+Cofre Soberano PQ repositories record a project-specific separate commercial
+path for controlled first-party rights. Their public scopes remain AGPL except
+where an exact file or project says otherwise: VaptVupt includes a GPL codec
+scope, Mirim retains explicitly MIT-marked support files, and VaptVupt Codec is
+GPL-3.0-or-later. The canonical Esquema source observed in Phase 30 is
+GPL-3.0-or-later and declares no separate commercial option.
+BTP remains Apache-2.0/CC-BY-4.0 and has no separate commercial option declared
+by the inspected checkout. The Security Ops Guix channel code remains
+GPL-3.0-or-later.
+
+These are independent options: an agreement for one does not cover another
+unless its executed text expressly says so. Packaging with Guix, inclusion in
+the ISO, shared authorship, or a public commercial notice grants no private
+commercial terms. Verify the canonical repository and obtain an executed
+agreement for the exact component and version. Every package definition and
+dependency preserves its own license.
+
+No license option grants trademark rights beyond truthful identification.
+Commercial licensing and security contact: sac@securityops.co

@@ -1,0 +1,1657 @@
+#!/run/current-system/profile/bin/bash -p
+# ============================================================================
+# security-ops-install — the Security Ops OS guided installer
+# ============================================================================
+# A branded (black background / cyan text) ncurses (whiptail) guided installer
+# for the declarative GNU Guix "Security Ops OS".  It collects the machine's
+# choices, GENERATES a self-contained /mnt/etc/config.scm, partitions the disk
+# (optionally LUKS-encrypted), makes the chosen filesystem, and runs
+# `guix system init' to build the system onto the target.
+#
+# It intentionally does NOT touch any disk until you type the target device
+# name to confirm.  Guix's install model is declarative: what this installer
+# produces is a config.scm you keep and can `guix system reconfigure' forever.
+#
+#   Filesystems : ext4 · btrfs · xfs · ZFS (planned; currently disabled)
+#   Encryption  : LUKS2 encrypted root volume (optional; ESP stays plaintext)
+#   Desktops    : Sway (Wayland) · XMonad on XLibre (X11) · KDE Plasma
+#   Kernel      : linux-securityops (version managed by securityopsctl)
+#
+# © Cristian Cezar Moisés · sac@securityops.co · AGPL-3.0-or-later
+# ============================================================================
+set -Eeuo pipefail
+set +x                             # inherited `bash -x' must not trace credentials
+
+# Bash privileged mode (`-p' in the kernel-interpreted shebang) suppresses
+# imported environment functions before the first command is evaluated.  Do
+# not move this protection into the script body: even `builtin' itself can be
+# shadowed by an exported function before an ordinary cleanup loop runs.
+# Remove any functions defined by a future trusted startup path as defense in
+# depth.  In particular, `readlink' must not be replaceable before sudo re-exec.
+while builtin read -r _ _ inherited_function; do
+  builtin unset -f -- "$inherited_function"
+done < <(builtin declare -F)
+builtin unset inherited_function
+
+# --- branding: black bg, cyan text (newt/whiptail palette) ------------------
+export NEWT_COLORS='
+root=,black
+window=cyan,black
+shadow=black,black
+border=cyan,black
+title=white,black
+button=black,cyan
+compactbutton=cyan,black
+actbutton=black,cyan
+checkbox=cyan,black
+actcheckbox=black,cyan
+entry=cyan,black
+disentry=gray,black
+label=cyan,black
+listbox=cyan,black
+actlistbox=black,cyan
+sellistbox=black,cyan
+actsellistbox=black,cyan
+textbox=cyan,black
+acttextbox=black,cyan
+emptyscale=,cyan
+fullscale=,cyan
+helpline=cyan,black
+roottext=cyan,black
+'
+# /run/setuid-programs (and its newer alias /run/privileged/bin) MUST come first:
+# the copy of sudo in the system profile is NOT setuid, so `sudo' resolved from
+# there fails with "sudo: effective uid is not 0 … nosuid".  The real setuid sudo
+# lives in /run/setuid-programs, so put it ahead of the profile on PATH.
+export PATH="/run/setuid-programs:/run/privileged/bin:/run/current-system/profile/bin:/run/current-system/profile/sbin"
+# CRITICAL: sudo's env_reset strips TERMINFO_DIRS (even without -E), so after the
+# self-elevation re-exec whiptail/slang can't find foot's (or any) terminfo and
+# dies "Unknown terminal: foot" before drawing a thing.  Re-point it at the
+# system profile, which ships every terminal's terminfo (foot, kitty, …).
+export TERMINFO_DIRS="/run/current-system/profile/share/terminfo"
+# Privileged code must not inherit loader or language search paths from the live
+# user.  TERM, locale variables, and the fixed terminfo path remain available to
+# the TUI; executable and module resolution comes only from immutable profiles.
+unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT GCONV_PATH LOCPATH NLSPATH \
+      GUILE_LOAD_PATH GUILE_LOAD_COMPILED_PATH GUILE_EXTENSIONS_PATH \
+      GUIX_PACKAGE_PATH GUIX_PROFILE GUIX_DAEMON_SOCKET GUIX_BUILD_OPTIONS \
+      GUIX_LOCPATH PYTHONPATH PYTHONHOME PERL5LIB RUBYLIB NODE_PATH \
+      BASH_ENV ENV CDPATH GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GNUPGHOME \
+      SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE CURL_HOME \
+      HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY NO_PROXY \
+      http_proxy https_proxy ftp_proxy all_proxy no_proxy \
+      HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_RUNTIME_DIR \
+      TMPDIR TMP TEMP
+# Git supports indexed GIT_CONFIG_KEY_N/GIT_CONFIG_VALUE_N variables.  Remove
+# the complete prefix, not merely the common singleton names.
+while IFS= read -r inherited_name; do
+  unset "$inherited_name"
+done < <(compgen -A variable GIT_CONFIG_)
+unset inherited_name
+IFS=$' \t\n'
+SRC_LINK=/etc/securityops/src     # embedded (securityops …) modules, for guix -L
+SRC=""
+SUBSTITUTE_URLS="https://substitutes.securityops.com.br https://substitutes.securityops.co https://ci.guix.gnu.org"
+PINNED_CHANNELS=""
+TITLE="Security Ops OS · Installer"
+RUNTIME_DIR=/run/securityops-installer
+PRIVILEGED_STATE_ROOT=""
+PRIVILEGED_HOME=""
+PRIVILEGED_XDG_CONFIG_HOME=""
+PRIVILEGED_XDG_CACHE_HOME=""
+PRIVILEGED_XDG_DATA_HOME=""
+PRIVILEGED_XDG_STATE_HOME=""
+PRIVILEGED_XDG_RUNTIME_DIR=""
+PRIVILEGED_TMPDIR=""
+TRUSTED_PYTHON_LINK=/run/current-system/profile/bin/python3
+TRUSTED_GUILE_LINK=/run/current-system/profile/bin/guile
+TRUSTED_GUILE_SITE_LINK=/run/current-system/profile/share/guile/site/3.0
+TRUSTED_GUILE_CCACHE_LINK=/run/current-system/profile/lib/guile/3.0/site-ccache
+TRUSTED_GUILE_EXTENSIONS_LINK=/run/current-system/profile/lib/guile/3.0/extensions
+TRUSTED_GUIX_LINK=/run/current-system/profile/bin/guix
+TRUSTED_CERT_FILE_LINK=/run/current-system/profile/etc/ssl/certs/ca-certificates.crt
+TRUSTED_CERT_DIR_LINK=/run/current-system/profile/etc/ssl/certs
+TRUSTED_FLOCK_LINK=/run/current-system/profile/bin/flock
+TRUSTED_SETSID_LINK=/run/current-system/profile/bin/setsid
+TRUSTED_SWAYMSG_LINK=/run/current-system/profile/bin/swaymsg
+TRUSTED_LOADKEYS_LINK=/run/current-system/profile/bin/loadkeys
+TRUSTED_SYNC_LINK=/run/current-system/profile/bin/sync
+LOG=""
+ADMIN_HASH_FILE=""
+COW_HELPER_PID=""
+COW_HELPER_PGID=""
+COW_HELPER_ACTIVE=0
+COW_HELPER_LAUNCH_IN_PROGRESS=0
+COW_PENDING_SIGNAL_STATUS=""
+COW_PENDING_SIGNAL_NAME=""
+
+FIXED_INSTALLER_LINK=/run/current-system/profile/bin/security-ops-install
+securityops_pre_root_store_file(){
+  local requested=${1:-} resolved relative item component metadata owner mode
+  local LC_ALL=C
+  resolved=$(/run/current-system/profile/bin/readlink -f -- "$requested") || return 1
+  case "$resolved" in /gnu/store/*) ;; *) return 1 ;; esac
+  relative=${resolved#/gnu/store/}
+  item=${relative%%/*}
+  [[ "$item" =~ ^[0-9abcdfghijklmnpqrsvwxyz]{32}-.+$ ]] || return 1
+  [ -f "$resolved" ] && [ ! -L "$resolved" ] || return 1
+  component=$resolved
+  while [[ "$component" == /gnu/store/* ]]; do
+    metadata=$(/run/current-system/profile/bin/stat -Lc '%u:%a' -- "$component") || return 1
+    owner=${metadata%%:*}
+    mode=${metadata#*:}
+    [[ "$owner" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 8#022) == 0 )) || return 1
+    [ "$component" = "/gnu/store/$item" ] && break
+    component=${component%/*}
+  done
+  [ "$component" = "/gnu/store/$item" ] || return 1
+  printf '%s\n' "$resolved"
+}
+
+# The destructive workflow may only start from the exact immutable package in
+# the active system profile.  Reject mutable copies before sourcing a sibling or
+# requesting sudo, and repeat this complete check after the root re-exec.
+INSTALLER_PATH=$(securityops_pre_root_store_file "$FIXED_INSTALLER_LINK") || {
+  echo "security-ops-install: fixed profile installer is missing or mutable" >&2
+  exit 1
+}
+INVOKED_INSTALLER=$(/run/current-system/profile/bin/readlink -f -- "$0") || {
+  echo "security-ops-install: could not resolve invoked installer" >&2
+  exit 1
+}
+if [ "$INVOKED_INSTALLER" != "$INSTALLER_PATH" ] || \
+   [ "$(/run/current-system/profile/bin/readlink -f -- "$FIXED_INSTALLER_LINK")" != "$INSTALLER_PATH" ]; then
+  echo "security-ops-install: run the immutable installer from the active system profile" >&2
+  exit 1
+fi
+INSTALLER_DIR=${INSTALLER_PATH%/*}
+PRIVATE_STATE_LIBRARY="$INSTALLER_DIR/private-state.sh"
+CONFIG_GENERATOR="$INSTALLER_DIR/gen-config.sh"
+COW_INIT_HELPER="$INSTALLER_DIR/cow-system-init.scm"
+for installer_sibling in \
+  "$PRIVATE_STATE_LIBRARY" "$CONFIG_GENERATOR" "$COW_INIT_HELPER"; do
+  verified_sibling=$(securityops_pre_root_store_file "$installer_sibling") || {
+    echo "security-ops-install: immutable installer sibling is missing or unsafe" >&2
+    exit 1
+  }
+  if [ "$verified_sibling" != "$installer_sibling" ] || \
+     [ "${verified_sibling%/*}" != "$INSTALLER_DIR" ]; then
+    echo "security-ops-install: installer siblings must share one immutable package" >&2
+    exit 1
+  fi
+done
+unset INVOKED_INSTALLER verified_sibling installer_sibling
+# shellcheck source=securityops/installer/private-state.sh
+. "$PRIVATE_STATE_LIBRARY"
+
+BANNER=$(cat <<'EOF'
+   ____                       _ _            ___
+  / ___|  ___  ___ _   _ _ __(_) |_ _   _   / _ \ _ __  ___
+  \___ \ / _ \/ __| | | | '__| | __| | | | | | | | '_ \/ __|
+   ___) |  __/ (__| |_| | |  | | |_| |_| | | |_| | |_) \__ \
+  |____/ \___|\___|\__,_|_|  |_|\__|\__, |  \___/| .__/|___/
+                                    |___/        |_|
+            I N   C O D E   W E   T R U S T .
+EOF
+)
+
+# Self-elevate.  Run it as the live user (no `sudo' needed) — we re-exec through
+# sudo with the ABSOLUTE script path ($0 is resolved when found via PATH), which
+# works regardless of sudo's secure_path, and WITHOUT `-E' (default env_reset
+# would otherwise refuse `-E' and the installer would "not start").  The re-exec
+# re-runs this file from the top as root, re-exporting NEWT_COLORS + PATH.
+need_root(){
+  [ "$EUID" -eq 0 ] && return 0
+  # Use only a fixed SETUID sudo entry.  The profile copy is nosuid, and a PATH
+  # lookup would let a hostile live-user directory become root after re-exec.
+  local trusted_sudo
+  trusted_sudo=$(securityops_trusted_setuid_sudo) || true
+  [ -n "$trusted_sudo" ] && \
+    exec "$trusted_sudo" -- "$INSTALLER_PATH" "$@"
+  echo "security-ops-install: trusted setuid sudo entry is unavailable" >&2
+  exit 1
+}
+need_root "$@"
+
+ulimit -c 0 || {
+  echo "security-ops-install: could not disable core dumps" >&2
+  exit 1
+}
+INTERNAL_LOCK_HELD=0
+if [[ ${1:-} == --internal-lock-held ]]; then
+  INTERNAL_LOCK_HELD=1
+  shift
+fi
+
+# Create all privileged runtime state only after elevation.  /run's root-owned
+# parent prevents an unprivileged rename race; the helper additionally refuses
+# symlinks, wrong owners, and permissive modes.  mktemp uses O_EXCL inside the
+# resulting mode-0700 directory, replacing the former predictable /tmp log.
+umask 077
+securityops_private_directory "$RUNTIME_DIR" || {
+  echo "security-ops-install: refusing unsafe private runtime directory" >&2
+  exit 1
+}
+TRUSTED_FLOCK=$(securityops_resolve_store_path \
+  "$TRUSTED_FLOCK_LINK" executable) || {
+  echo "security-ops-install: trusted flock is unavailable" >&2
+  exit 1
+}
+TRUSTED_SETSID=$(securityops_resolve_store_path \
+  "$TRUSTED_SETSID_LINK" executable) || {
+  echo "security-ops-install: trusted setsid is unavailable" >&2
+  exit 1
+}
+TRUSTED_PYTHON=$(securityops_resolve_store_path \
+  "$TRUSTED_PYTHON_LINK" executable) || {
+  echo "security-ops-install: trusted Python is unavailable" >&2
+  exit 1
+}
+# Serialize destructive sessions before allocating per-run state.  A dedicated
+# flock supervisor owns the lock; --close prevents the installer and every
+# descendant from inheriting the lock file descriptor.
+LOCK_FILE="$RUNTIME_DIR/installer.lock"
+if [ ! -e "$LOCK_FILE" ]; then
+  set -C
+  : >"$LOCK_FILE" || {
+    set +C
+    echo "security-ops-install: could not create private installer lock" >&2
+    exit 1
+  }
+  set +C
+fi
+if [ -L "$LOCK_FILE" ] || [ ! -f "$LOCK_FILE" ] || \
+   [ "$(stat -c '%u:%g:%a' -- "$LOCK_FILE")" != "0:0:600" ]; then
+  echo "security-ops-install: refusing unsafe installer lock" >&2
+  exit 1
+fi
+COW_LOCK_FILE="$RUNTIME_DIR/cow-system-init.lock"
+if [ ! -e "$COW_LOCK_FILE" ]; then
+  set -C
+  : >"$COW_LOCK_FILE" || {
+    set +C
+    echo "security-ops-install: could not create private COW lifecycle lock" >&2
+    exit 1
+  }
+  set +C
+fi
+if [ -L "$COW_LOCK_FILE" ] || [ ! -f "$COW_LOCK_FILE" ] || \
+   [ "$(stat -c '%u:%g:%a' -- "$COW_LOCK_FILE")" != "0:0:600" ]; then
+  echo "security-ops-install: refusing unsafe COW lifecycle lock" >&2
+  exit 1
+fi
+if [ "$INTERNAL_LOCK_HELD" = 0 ]; then
+  exec "$TRUSTED_FLOCK" -n -E 75 --close --verbose "$LOCK_FILE" \
+    "$INSTALLER_PATH" --internal-lock-held "$@"
+fi
+if ! securityops_verify_flock_supervisor \
+     "$LOCK_FILE" "$TRUSTED_FLOCK" "$TRUSTED_PYTHON" "$PPID"; then
+  echo "security-ops-install: internal lock marker is not bound to the lock supervisor" >&2
+  exit 1
+fi
+exec {LOCK_PROBE_FD}>>"$LOCK_FILE"
+if "$TRUSTED_FLOCK" -n "$LOCK_PROBE_FD"; then
+  "$TRUSTED_FLOCK" -u "$LOCK_PROBE_FD" || true
+  exec {LOCK_PROBE_FD}>&-
+  echo "security-ops-install: internal lock marker has no supervising lock" >&2
+  exit 1
+fi
+exec {LOCK_PROBE_FD}>&-
+
+IFS= read -r installer_process_status <"/proc/$$/stat" || {
+  echo "security-ops-install: could not bind installer process identity" >&2
+  exit 1
+}
+installer_process_status=${installer_process_status##*) }
+read -r -a installer_process_fields <<<"$installer_process_status"
+INSTALLER_START_TIME=${installer_process_fields[19]:-}
+[[ "$INSTALLER_START_TIME" =~ ^[0-9]+$ ]] || {
+  echo "security-ops-install: installer process start time is malformed" >&2
+  exit 1
+}
+unset installer_process_status installer_process_fields
+
+PRIVILEGED_STATE_ROOT=$(umask 077; mktemp -d -- "$RUNTIME_DIR/session.XXXXXX") || {
+  echo "security-ops-install: could not create isolated privileged state" >&2
+  exit 1
+}
+securityops_private_directory "$PRIVILEGED_STATE_ROOT" || {
+  echo "security-ops-install: refusing unsafe privileged state root" >&2
+  exit 1
+}
+PRIVILEGED_HOME="$PRIVILEGED_STATE_ROOT/home"
+PRIVILEGED_XDG_CONFIG_HOME="$PRIVILEGED_STATE_ROOT/xdg-config"
+PRIVILEGED_XDG_CACHE_HOME="$PRIVILEGED_STATE_ROOT/xdg-cache"
+PRIVILEGED_XDG_DATA_HOME="$PRIVILEGED_STATE_ROOT/xdg-data"
+PRIVILEGED_XDG_STATE_HOME="$PRIVILEGED_STATE_ROOT/xdg-state"
+PRIVILEGED_XDG_RUNTIME_DIR="$PRIVILEGED_STATE_ROOT/xdg-runtime"
+PRIVILEGED_TMPDIR="$PRIVILEGED_STATE_ROOT/tmp"
+# Root tools must never consult the live user's HOME, XDG, temporary-directory,
+# Git, or Guix configuration.  Each directory is empty, root-owned, mode 0700,
+# and volatile; channels and substitute URLs are passed explicitly below.
+for private_directory in \
+  "$PRIVILEGED_HOME" "$PRIVILEGED_XDG_CONFIG_HOME" \
+  "$PRIVILEGED_XDG_CACHE_HOME" "$PRIVILEGED_XDG_DATA_HOME" \
+  "$PRIVILEGED_XDG_STATE_HOME" "$PRIVILEGED_XDG_RUNTIME_DIR" \
+  "$PRIVILEGED_TMPDIR"; do
+  securityops_private_directory "$private_directory" || {
+    echo "security-ops-install: refusing unsafe privileged runtime state" >&2
+    exit 1
+  }
+done
+unset private_directory
+export HOME="$PRIVILEGED_HOME"
+export XDG_CONFIG_HOME="$PRIVILEGED_XDG_CONFIG_HOME"
+export XDG_CACHE_HOME="$PRIVILEGED_XDG_CACHE_HOME"
+export XDG_DATA_HOME="$PRIVILEGED_XDG_DATA_HOME"
+export XDG_STATE_HOME="$PRIVILEGED_XDG_STATE_HOME"
+export XDG_RUNTIME_DIR="$PRIVILEGED_XDG_RUNTIME_DIR"
+export TMPDIR="$PRIVILEGED_TMPDIR"
+LOG=$(securityops_private_tempfile "$RUNTIME_DIR" install-log) || {
+  echo "security-ops-install: could not create a private installer log" >&2
+  exit 1
+}
+log(){ echo "[$(date +%T)] $*" >>"$LOG"; }
+
+cow_helper_pid_running(){
+  local status state
+  [ "$COW_HELPER_ACTIVE" = 1 ] && [ -n "$COW_HELPER_PID" ] || return 1
+  [ -r "/proc/$COW_HELPER_PID/stat" ] || return 1
+  IFS= read -r status <"/proc/$COW_HELPER_PID/stat" || return 1
+  status=${status##*) }
+  state=${status%% *}
+  [ "$state" != Z ]
+}
+
+cow_helper_group_alive(){
+  [ "$COW_HELPER_ACTIVE" = 1 ] && [ -n "$COW_HELPER_PGID" ] && \
+    kill -0 -- "-$COW_HELPER_PGID" 2>/dev/null
+}
+
+recover_and_witness_cow_lifecycle(){
+  local witness_fd attempts=100 lock_available=0
+  while [ "$attempts" -gt 0 ]; do
+    exec {witness_fd}>>"$COW_LOCK_FILE" || return 1
+    if "$TRUSTED_FLOCK" -n "$witness_fd"; then
+      "$TRUSTED_FLOCK" -u "$witness_fd" || {
+        exec {witness_fd}>&-
+        return 1
+      }
+      exec {witness_fd}>&-
+      lock_available=1
+      break
+    fi
+    exec {witness_fd}>&-
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  [ "$lock_available" = 1 ] || return 1
+  if [ -e "$RUNTIME_DIR/cow-system-init.state" ] || \
+     [ -L "$RUNTIME_DIR/cow-system-init.state" ]; then
+    GUILE_EXTENSIONS_PATH="$TRUSTED_GUILE_EXTENSIONS" \
+      "$TRUSTED_FLOCK" -n -E 75 --no-fork "$COW_LOCK_FILE" \
+      "$TRUSTED_GUILE" -L "$TRUSTED_GUILE_SITE" -C "$TRUSTED_GUILE_CCACHE" \
+      -s "$COW_INIT_HELPER" --recover-only "$$" "$INSTALLER_START_TIME" \
+      "$TRUSTED_FLOCK" >>"$LOG" 2>&1 || return 1
+  fi
+  [ ! -e "$RUNTIME_DIR/cow-system-init.state" ] && \
+    [ ! -L "$RUNTIME_DIR/cow-system-init.state" ] || return 1
+  exec {witness_fd}>>"$COW_LOCK_FILE" || return 1
+  if ! "$TRUSTED_FLOCK" -n "$witness_fd"; then
+    exec {witness_fd}>&-
+    return 1
+  fi
+  "$TRUSTED_FLOCK" -u "$witness_fd" || {
+    exec {witness_fd}>&-
+    return 1
+  }
+  exec {witness_fd}>&-
+}
+
+terminate_owned_cow_helper(){
+  local signal_name=${1:-TERM} attempts rc=0
+  [ "$COW_HELPER_ACTIVE" = 1 ] || return 0
+  if cow_helper_group_alive; then
+    kill -s "$signal_name" -- "-$COW_HELPER_PGID" 2>/dev/null || true
+  elif cow_helper_pid_running; then
+    kill -s "$signal_name" -- "$COW_HELPER_PID" 2>/dev/null || true
+  fi
+  attempts=600
+  while cow_helper_pid_running && [ "$attempts" -gt 0 ]; do
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  if cow_helper_pid_running || cow_helper_group_alive; then
+    log "COW helper exceeded cleanup deadline; sending SIGKILL to owned group"
+    if [ -n "$COW_HELPER_PGID" ]; then
+      kill -KILL -- "-$COW_HELPER_PGID" 2>/dev/null || true
+    else
+      kill -KILL -- "$COW_HELPER_PID" 2>/dev/null || true
+    fi
+  fi
+  wait "$COW_HELPER_PID" 2>/dev/null || rc=$?
+  # The session leader is now reaped.  Any remaining process with this PGID is
+  # an escaped helper descendant and must be killed before target/private state
+  # can be touched by Bash cleanup.
+  attempts=100
+  while cow_helper_group_alive && [ "$attempts" -gt 0 ]; do
+    kill -KILL -- "-$COW_HELPER_PGID" 2>/dev/null || true
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  if cow_helper_group_alive; then
+    log "owned COW helper group survived SIGKILL; retaining cleanup guard and runtime evidence"
+    return 125
+  fi
+  if ! recover_and_witness_cow_lifecycle; then
+    log "COW lifecycle has no authenticated completion witness; retaining cleanup guard"
+    return 125
+  fi
+  COW_HELPER_ACTIVE=0
+  COW_HELPER_PID=""
+  COW_HELPER_PGID=""
+  return "$rc"
+}
+
+wait_owned_cow_helper(){
+  local rc=0 attempts
+  [ "$COW_HELPER_ACTIVE" = 1 ] || return 125
+  wait "$COW_HELPER_PID" || rc=$?
+  attempts=600
+  while cow_helper_group_alive && [ "$attempts" -gt 0 ]; do
+    kill -TERM -- "-$COW_HELPER_PGID" 2>/dev/null || true
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  if cow_helper_group_alive; then
+    kill -KILL -- "-$COW_HELPER_PGID" 2>/dev/null || true
+    attempts=100
+    while cow_helper_group_alive && [ "$attempts" -gt 0 ]; do
+      sleep 0.1
+      attempts=$((attempts - 1))
+    done
+  fi
+  if cow_helper_group_alive; then
+    log "owned COW helper left a live descendant process group"
+    return 125
+  fi
+  if ! recover_and_witness_cow_lifecycle; then
+    log "COW helper exited without a recoverable completion witness"
+    return 125
+  fi
+  COW_HELPER_ACTIVE=0
+  COW_HELPER_PID=""
+  COW_HELPER_PGID=""
+  return "$rc"
+}
+
+cleanup_private_state(){
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    log "refusing private-state cleanup while the COW helper is active"
+    return 1
+  fi
+  unset UPASS UPASS2 LPASS LPASS2
+  if [[ -n ${ADMIN_HASH_FILE:-} ]]; then
+    case "$ADMIN_HASH_FILE" in
+      "$RUNTIME_DIR"/admin-hash.*) rm -f -- "$ADMIN_HASH_FILE" ;;
+      *) log "refusing unexpected admin-hash cleanup path" ;;
+    esac
+    ADMIN_HASH_FILE=""
+  fi
+  if [[ -n ${PRIVILEGED_STATE_ROOT:-} ]]; then
+    case "$PRIVILEGED_STATE_ROOT" in
+      "$RUNTIME_DIR"/session.*)
+        if securityops_private_directory "$PRIVILEGED_STATE_ROOT"; then
+          rm -rf --one-file-system -- "$PRIVILEGED_STATE_ROOT"
+        else
+          log "refusing unsafe privileged-state cleanup path"
+        fi ;;
+      *) log "refusing unexpected privileged-state cleanup path" ;;
+    esac
+    PRIVILEGED_STATE_ROOT=""
+  fi
+}
+
+WIPED=0                       # set to 1 the instant we start modifying the disk
+TARGET_MOUNTED=0              # only this run may unmount /mnt
+CRYPTROOT_OPENED=0            # only this run may close cryptroot
+TARGET_MOUNT_ATTEMPTED=0
+CRYPTROOT_OPEN_ATTEMPTED=0
+EXPECTED_ROOTDEV_MAJMIN=""
+EXPECTED_CRYPT_SOURCE=""
+
+cleanup_target_state(){
+  local failed=0
+  local mounted_major_minor crypt_source
+  if [ "$TARGET_MOUNT_ATTEMPTED" = 1 ] || [ "$TARGET_MOUNTED" = 1 ]; then
+    mounted_major_minor=$(findmnt -nro MAJ:MIN -M /mnt 2>/dev/null || true)
+    if [ -z "$mounted_major_minor" ]; then
+      TARGET_MOUNT_ATTEMPTED=0
+      TARGET_MOUNTED=0
+    elif [ -n "$EXPECTED_ROOTDEV_MAJMIN" ] && \
+         [ "$mounted_major_minor" = "$EXPECTED_ROOTDEV_MAJMIN" ] && \
+         target_identity_matches_snapshot && validate_created_partition_layout; then
+      if umount -R /mnt >>"$LOG" 2>&1; then
+        TARGET_MOUNT_ATTEMPTED=0
+        TARGET_MOUNTED=0
+      else
+        log "failed to unmount installer-owned /mnt"
+        failed=1
+      fi
+    else
+      log "refusing to unmount /mnt: mounted device identity is not installer-owned"
+      failed=1
+    fi
+  fi
+  if [ "$CRYPTROOT_OPEN_ATTEMPTED" = 1 ] || [ "$CRYPTROOT_OPENED" = 1 ]; then
+    if ! cryptsetup status cryptroot >/dev/null 2>&1; then
+      CRYPTROOT_OPEN_ATTEMPTED=0
+      CRYPTROOT_OPENED=0
+    else
+      crypt_source=$(LC_ALL=C cryptsetup status cryptroot 2>/dev/null | \
+        awk '$1 == "device:" { print $2; exit }')
+      crypt_source=$(readlink -f -- "$crypt_source" 2>/dev/null || true)
+      if [ -n "$EXPECTED_CRYPT_SOURCE" ] && \
+         [ "$crypt_source" = "$EXPECTED_CRYPT_SOURCE" ] && \
+         [ -n "${LUKS_UUID:-}" ] && \
+         [ "$(cryptsetup luksUUID "$crypt_source" 2>/dev/null || true)" = "$LUKS_UUID" ] && \
+         target_identity_matches_snapshot && validate_created_partition_layout; then
+        if cryptsetup close cryptroot >>"$LOG" 2>&1; then
+          CRYPTROOT_OPEN_ATTEMPTED=0
+          CRYPTROOT_OPENED=0
+        else
+          log "failed to close installer-owned cryptroot"
+          failed=1
+        fi
+      else
+        log "refusing to close cryptroot: backing device is not installer-owned"
+        failed=1
+      fi
+    fi
+  fi
+  return "$failed"
+}
+
+cleanup_all(){
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    terminate_owned_cow_helper TERM || true
+  fi
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    log "refusing target/private cleanup while an owned COW descendant survives"
+    return 1
+  fi
+  cleanup_target_state || true
+  cleanup_private_state || true
+}
+
+die(){ trap - ERR; whiptail --title "$TITLE — ERROR" --msgbox "$1\n\nSee $LOG" 16 76; exit 1; }
+on_err(){
+  trap - ERR
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    terminate_owned_cow_helper TERM || true
+  fi
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    die "The COW helper did not terminate; target/private cleanup is blocked. Do not reuse the target until recovery diagnostics complete."
+  fi
+  if [ "$WIPED" = 1 ]; then
+    cleanup_target_state || true
+    die "Installer aborted on error (line $1). The target disk was PARTIALLY
+MODIFIED. Installer-owned mounts/mappings were cleaned where possible; inspect
+the private log before retrying."
+  else
+    die "Installer aborted on error (line $1). No disk was modified."
+  fi
+}
+on_signal(){
+  local status=$1 signal_name=$2
+  # Bash delivers traps only between complete commands, but a signal can still
+  # arrive after the async helper exists and before `$!' is captured.  Latch it
+  # until the helper PID/PGID is authenticated; cleanup must never mistake that
+  # launch window for proof that no helper exists.
+  if [ "$COW_HELPER_LAUNCH_IN_PROGRESS" = 1 ]; then
+    if [ -z "$COW_PENDING_SIGNAL_STATUS" ]; then
+      COW_PENDING_SIGNAL_STATUS=$status
+      COW_PENDING_SIGNAL_NAME=$signal_name
+    fi
+    log "latched $signal_name during COW helper launch authentication"
+    return 0
+  fi
+  trap - ERR HUP INT TERM QUIT
+  log "interrupted by $signal_name"
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    terminate_owned_cow_helper "$signal_name" || true
+  fi
+  if [ "$COW_HELPER_ACTIVE" = 1 ]; then
+    log "signal cleanup blocked because owned COW descendants survived"
+    exit 125
+  fi
+  if [ "$WIPED" = 1 ]; then
+    cleanup_target_state || true
+  fi
+  exit "$status"
+}
+trap cleanup_all EXIT
+trap 'on_err $LINENO' ERR
+trap 'on_signal 129 HUP' HUP
+trap 'on_signal 130 INT' INT
+trap 'on_signal 131 QUIT' QUIT
+trap 'on_signal 143 TERM' TERM
+
+# Hard requirement: the whiptail TUI.  Fail loudly (not silently) if absent.
+command -v whiptail >/dev/null 2>&1 || {
+  echo "security-ops-install: 'whiptail' not found on PATH — cannot draw the installer." >&2
+  exit 1; }
+TRUSTED_GUILE=$(securityops_resolve_store_path \
+  "$TRUSTED_GUILE_LINK" executable) || {
+  echo "security-ops-install: trusted Guile runtime is incomplete" >&2
+  exit 1; }
+TRUSTED_GUILE_SITE=$(securityops_resolve_store_path \
+  "$TRUSTED_GUILE_SITE_LINK" directory) || {
+  echo "security-ops-install: trusted Guile source modules are unavailable" >&2
+  exit 1; }
+TRUSTED_GUILE_CCACHE=$(securityops_resolve_store_path \
+  "$TRUSTED_GUILE_CCACHE_LINK" directory) || {
+  echo "security-ops-install: trusted Guile compiled modules are unavailable" >&2
+  exit 1; }
+TRUSTED_GUILE_EXTENSIONS=$(securityops_resolve_store_path \
+  "$TRUSTED_GUILE_EXTENSIONS_LINK" directory) || {
+  echo "security-ops-install: trusted Guile extensions are unavailable" >&2
+  exit 1; }
+TRUSTED_GUIX=$(securityops_resolve_store_path \
+  "$TRUSTED_GUIX_LINK" executable) || {
+  echo "security-ops-install: trusted Guix executable is unavailable" >&2
+  exit 1; }
+TRUSTED_CERT_FILE=$(securityops_resolve_store_path \
+  "$TRUSTED_CERT_FILE_LINK" regular) || {
+  echo "security-ops-install: trusted CA certificate bundle is unavailable" >&2
+  exit 1; }
+TRUSTED_CERT_DIR=$(securityops_resolve_store_path \
+  "$TRUSTED_CERT_DIR_LINK" directory) || {
+  echo "security-ops-install: trusted CA certificate directory is unavailable" >&2
+  exit 1; }
+TRUSTED_SWAYMSG=$(securityops_resolve_store_path \
+  "$TRUSTED_SWAYMSG_LINK" executable) || {
+  echo "security-ops-install: trusted Sway keyboard control is unavailable" >&2
+  exit 1; }
+TRUSTED_LOADKEYS=$(securityops_resolve_store_path \
+  "$TRUSTED_LOADKEYS_LINK" executable) || {
+  echo "security-ops-install: trusted console keyboard control is unavailable" >&2
+  exit 1; }
+TRUSTED_SYNC=$(securityops_resolve_store_path \
+  "$TRUSTED_SYNC_LINK" executable) || {
+  echo "security-ops-install: trusted filesystem sync tool is unavailable" >&2
+  exit 1; }
+TRUSTED_SETUID_SUDO=$(securityops_trusted_setuid_sudo) || {
+  echo "security-ops-install: trusted privilege-transition helper is unavailable" >&2
+  exit 1; }
+SRC=$(securityops_resolve_store_path "$SRC_LINK" directory) || {
+  echo "security-ops-install: authenticated embedded source is unavailable" >&2
+  exit 1; }
+PINNED_CHANNELS=$(securityops_resolve_store_path \
+  "$SRC/channels.guix" regular) || {
+  echo "security-ops-install: authenticated pinned channels are unavailable" >&2
+  exit 1; }
+command -v mkpasswd >/dev/null 2>&1 || {
+  echo "security-ops-install: 'mkpasswd' not found — cannot protect the administrative password." >&2
+  exit 1; }
+CHPASSWD_HELP=$(chpasswd --help 2>&1) || {
+  echo "security-ops-install: could not inspect chpasswd capabilities" >&2
+  exit 1; }
+if ! grep -q -- '--encrypted' <<<"$CHPASSWD_HELP" || \
+   ! grep -q -- '--root CHROOT_DIR' <<<"$CHPASSWD_HELP"; then
+    echo "security-ops-install: chpasswd lacks required encrypted target-root support" >&2
+    exit 1
+fi
+unset CHPASSWD_HELP
+
+KERNEL_VERSION=$("$TRUSTED_PYTHON" -I -S -c \
+  'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["kernel"]["version"])' \
+  "$SRC/securityops/settings.json")
+[[ "$KERNEL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "security-ops-install: invalid kernel version in settings.json" >&2
+  exit 1; }
+# Import every privileged helper module under the same empty environment shape
+# used for the real system-init invocation.  Fail before asking for a target.
+GUILE_EXTENSIONS_PATH="$TRUSTED_GUILE_EXTENSIONS" \
+  "$TRUSTED_GUILE" -L "$TRUSTED_GUILE_SITE" -C "$TRUSTED_GUILE_CCACHE" \
+  -c '(use-modules (gnu build install) (gnu build linux-container)
+                   (gnu services herd) (gcrypt hash) (guix base16)
+                   (guix build syscalls) (shepherd system) (sqlite3))' || {
+    echo "security-ops-install: trusted Guile installer modules cannot be loaded" >&2
+    exit 1
+  }
+
+# Repair any authenticated COW journal retained by an abrupt prior installer
+# death before showing disk choices or rejecting target-resource collisions.
+# A failed/ambiguous recovery is a pre-destructive blocker, never a warning.
+if ! GUILE_EXTENSIONS_PATH="$TRUSTED_GUILE_EXTENSIONS" \
+     "$TRUSTED_FLOCK" -n -E 75 --no-fork "$COW_LOCK_FILE" \
+       "$TRUSTED_GUILE" -L "$TRUSTED_GUILE_SITE" -C "$TRUSTED_GUILE_CCACHE" \
+       -s "$COW_INIT_HELPER" --recover-only "$$" "$INSTALLER_START_TIME" \
+       "$TRUSTED_FLOCK" >>"$LOG" 2>&1; then
+  echo "security-ops-install: prior Guix COW state could not be recovered; no disk was modified (log: $LOG)" >&2
+  exit 1
+fi
+
+msg(){ whiptail --title "$TITLE" --msgbox "$1" "${2:-14}" "${3:-74}"; }
+yesno(){ whiptail --title "$TITLE" --yesno "$1" "${2:-12}" "${3:-74}"; }
+input(){ whiptail --title "$TITLE" --inputbox "$1" 10 74 "${2:-}" 3>&1 1>&2 2>&3; }
+password(){ whiptail --title "$TITLE" --passwordbox "$1" 10 74 3>&1 1>&2 2>&3; }
+menu(){ local p="$1"; shift; whiptail --title "$TITLE" --menu "$p" 20 74 10 "$@" 3>&1 1>&2 2>&3; }
+
+apply_live_keyboard_layout(){
+  local xkb_layout=$1 xkb_variant=$2 console_keymap="" caller_uid=""
+  local runtime_directory runtime_metadata sway_socket socket_metadata tty_path
+  local -a sway_sockets=()
+  local applied=0 sway_command
+
+  case "$xkb_layout:$xkb_variant" in
+    us:)       console_keymap=us ;;
+    br:abnt2) console_keymap=br-abnt2 ;;
+    gb:)       console_keymap=uk ;;
+    de:)       console_keymap=de ;;
+    fr:)       console_keymap=fr ;;
+    es:)       console_keymap=es ;;
+    *) return 1 ;;
+  esac
+
+  # The trusted installer input path is Sway.  Apply the requested XKB mapping through the
+  # caller-owned IPC socket while executing swaymsg as that unprivileged user,
+  # so a hostile socket can never feed parser input to a root swaymsg process.
+  caller_uid=${SUDO_UID:-}
+  if [[ "$caller_uid" =~ ^[1-9][0-9]*$ ]]; then
+    runtime_directory="/run/user/$caller_uid"
+    runtime_metadata=$(stat -Lc '%u:%a' -- "$runtime_directory" 2>/dev/null || true)
+    if [[ "$runtime_metadata" == "$caller_uid:700" && ! -L "$runtime_directory" ]]; then
+      shopt -s nullglob
+      for sway_socket in "$runtime_directory"/sway-ipc."$caller_uid".*.sock; do
+        socket_metadata=$(stat -Lc '%u' -- "$sway_socket" 2>/dev/null || true)
+        if [[ ! -L "$sway_socket" && -S "$sway_socket" &&
+              "$socket_metadata" == "$caller_uid" ]]; then
+          sway_sockets+=("$sway_socket")
+        fi
+      done
+      shopt -u nullglob
+      if [ "${#sway_sockets[@]}" -eq 1 ]; then
+        sway_command="input type:keyboard xkb_layout \"$xkb_layout\"; input type:keyboard xkb_variant \"$xkb_variant\""
+        if "$TRUSTED_SETUID_SUDO" -u "#$caller_uid" -- \
+             "$TRUSTED_SWAYMSG" -s "${sway_sockets[0]}" "$sway_command" \
+             >>"$LOG" 2>&1; then
+          applied=1
+        fi
+      fi
+    fi
+  fi
+
+  # A direct VT installation has no compositor.  Apply the corresponding
+  # console map there; do not call loadkeys from a pseudo-terminal and mistake
+  # a global console change for a successful graphical layout switch.
+  tty_path=$(tty 2>/dev/null || true)
+  if [[ "$tty_path" =~ ^/dev/tty[0-9]+$ ]]; then
+    if "$TRUSTED_LOADKEYS" "$console_keymap" >>"$LOG" 2>&1; then
+      applied=1
+    fi
+  fi
+
+  [ "$applied" -eq 1 ]
+}
+
+# Resolve the immutable live root named on the kernel command line.  `/` itself
+# is an overlay after Guix switches root, so findmnt(8) on `/` cannot identify
+# the USB and must never be used as the destructive-write guard.
+cmdline_root_spec(){
+  local cmdline_path="$1" word
+  local -a words=() root_specs=()
+  [ -r "$cmdline_path" ] || return 1
+  read -r -a words < "$cmdline_path"
+  for word in "${words[@]}"; do
+    case "$word" in root=*) root_specs+=("${word#root=}");; esac
+  done
+  # The pinned Guix initrd consumes the first root= argument.  Requiring exactly
+  # one avoids protecting a later decoy when conflicting arguments are present.
+  [ "${#root_specs[@]}" -eq 1 ] && [ -n "${root_specs[0]}" ] || return 1
+  printf '%s\n' "${root_specs[0]}"
+}
+resolve_root_devices(){
+  local spec="$1" tag="" value="" dev="" encoded=""
+  case "$spec" in
+    UUID=*) tag=UUID; value=${spec#UUID=} ;;
+    LABEL=*) tag=LABEL; value=${spec#LABEL=} ;;
+    PARTUUID=*) tag=PARTUUID; value=${spec#PARTUUID=} ;;
+    PARTLABEL=*) tag=PARTLABEL; value=${spec#PARTLABEL=} ;;
+    # GRUB generated for the current live ISO passes its filesystem UUID as a
+    # bare root= value.  Accept only the strict DCE form and enumerate *every*
+    # matching block device so a cloned UUID cannot hide a writable live disk.
+    [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f])
+      # Guix's ISO9660 GRUB code renders the 16 ASCII timestamp digits as a
+      # DCE UUID.  Decode that exact representation back to blkid's ISO UUID
+      # (YYYY-MM-DD-HH-MM-SS-CC); do not reinterpret arbitrary bare values.
+      encoded=${spec//-/}
+      value=$("$TRUSTED_PYTHON" -I -S -c '
+import re, sys
+raw = bytes.fromhex(sys.argv[1]).decode("ascii")
+if not re.fullmatch(r"[0-9]{16}", raw):
+    raise SystemExit(2)
+print(f"{raw[0:4]}-{raw[4:6]}-{raw[6:8]}-{raw[8:10]}-{raw[10:12]}-{raw[12:14]}-{raw[14:16]}")
+' "$encoded" 2>/dev/null) || return 1
+      tag=UUID ;;
+    /dev/*)
+      dev=$(readlink -f -- "$spec" 2>/dev/null || true);;
+    *) return 1;;
+  esac
+  if [ -n "$tag" ]; then
+    [ -n "$value" ] && [[ ! "$value" =~ [[:cntrl:]] ]] || return 1
+    while IFS= read -r dev; do
+      [ -b "$dev" ] || continue
+      readlink -f -- "$dev"
+    done < <(blkid -t "$tag=$value" -o device 2>/dev/null || true)
+  else
+    [ -n "$dev" ] && [ -b "$dev" ] || return 1
+    readlink -f -- "$dev"
+  fi | sort -u
+}
+backing_disks(){
+  local dev
+  dev=$(readlink -f -- "$1" 2>/dev/null || true)
+  [ -n "$dev" ] || return 1
+  # Inverse dependency order walks partition/device-mapper stacks toward the
+  # physical disks.  Return every leaf: RAID/LVM roots can span more than one,
+  # and protecting only the first would leave another live backing disk writable.
+  lsblk -srnpo NAME,TYPE "$dev" 2>/dev/null | \
+    awk '$2=="disk" { print $1 }' | sort -u
+}
+
+device_tree_busy_reason(){
+  local target="$1" nodes node node_real major_minor holder_directory
+  local swap_device swap_real
+  nodes=$(lsblk -nrpo NAME "$target" 2>/dev/null) || {
+    printf 'could not enumerate the target device tree\n'
+    return 0
+  }
+  [ -n "$nodes" ] || {
+    printf 'target device tree is empty\n'
+    return 0
+  }
+  while IFS= read -r node; do
+    node_real=$(readlink -f -- "$node" 2>/dev/null || true)
+    [ -n "$node_real" ] || {
+      printf 'could not canonicalize target member %s\n' "$node"
+      return 0
+    }
+    if findmnt -rn -S "$node_real" >/dev/null 2>&1; then
+      printf '%s or one of its descendants is mounted\n' "$node_real"
+      return 0
+    fi
+    while read -r swap_device _; do
+      [ "$swap_device" != Filename ] || continue
+      swap_real=$(readlink -f -- "$swap_device" 2>/dev/null || true)
+      if [ -n "$swap_real" ] && [ "$swap_real" = "$node_real" ]; then
+        printf '%s is active swap\n' "$node_real"
+        return 0
+      fi
+    done < /proc/swaps
+    major_minor=$(lsblk -dnro MAJ:MIN "$node_real" 2>/dev/null || true)
+    [ -n "$major_minor" ] || {
+      printf 'could not identify target member %s\n' "$node_real"
+      return 0
+    }
+    holder_directory="/sys/dev/block/$major_minor/holders"
+    if [ -d "$holder_directory" ] && \
+       find "$holder_directory" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+      printf '%s has an active device-mapper/RAID/LVM holder\n' "$node_real"
+      return 0
+    fi
+  done <<<"$nodes"
+}
+
+secure_boot_state(){
+  local -a variables=()
+  local efivars_directory=${1:-/sys/firmware/efi/efivars} byte
+  shopt -s nullglob
+  variables=("$efivars_directory"/SecureBoot-*)
+  shopt -u nullglob
+  if [ "${#variables[@]}" -eq 0 ]; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  [ "${#variables[@]}" -eq 1 ] || {
+    printf 'invalid\n'
+    return 0
+  }
+  if [ -L "${variables[0]}" ] || [ ! -f "${variables[0]}" ] || \
+     [ "$(stat -Lc '%s' -- "${variables[0]}" 2>/dev/null || true)" != 5 ]; then
+    printf 'invalid\n'
+    return 0
+  fi
+  byte=$(od -An -t u1 -j 4 -N 1 -- "${variables[0]}" 2>/dev/null | tr -d '[:space:]')
+  case "$byte" in
+    0) printf 'disabled\n' ;;
+    1) printf 'enabled\n' ;;
+    *) printf 'invalid\n' ;;
+  esac
+}
+
+validate_created_partition_layout(){
+  local p1_real p2_real p1_parent p2_parent p1_kind p2_kind
+  local p1_major_minor p2_major_minor p1_start_sectors p2_start_sectors
+  local p1_start_bytes p2_start_bytes p1_size_bytes p2_size_bytes
+  local p1_partition_type p2_partition_type post_diskseq
+
+  [ -b "$P1" ] && [ -b "$P2" ] || return 1
+  p1_real=$(readlink -f -- "$P1" 2>/dev/null || true)
+  p2_real=$(readlink -f -- "$P2" 2>/dev/null || true)
+  [ -n "$p1_real" ] && [ -n "$p2_real" ] && [ "$p1_real" != "$p2_real" ] || return 1
+  p1_parent=$(lsblk -dnpo PKNAME "$p1_real" 2>/dev/null || true)
+  p2_parent=$(lsblk -dnpo PKNAME "$p2_real" 2>/dev/null || true)
+  p1_parent=$(readlink -f -- "$p1_parent" 2>/dev/null || true)
+  p2_parent=$(readlink -f -- "$p2_parent" 2>/dev/null || true)
+  [ "$p1_parent" = "$TARGET_DISK" ] && [ "$p2_parent" = "$TARGET_DISK" ] || return 1
+  p1_kind=$(lsblk -dnro TYPE "$p1_real" 2>/dev/null || true)
+  p2_kind=$(lsblk -dnro TYPE "$p2_real" 2>/dev/null || true)
+  [ "$p1_kind" = part ] && [ "$p2_kind" = part ] || return 1
+
+  p1_major_minor=$(lsblk -dnro MAJ:MIN "$p1_real" 2>/dev/null || true)
+  p2_major_minor=$(lsblk -dnro MAJ:MIN "$p2_real" 2>/dev/null || true)
+  [[ "$p1_major_minor" =~ ^[0-9]+:[0-9]+$ &&
+     "$p2_major_minor" =~ ^[0-9]+:[0-9]+$ ]] || return 1
+  p1_start_sectors=$(<"/sys/dev/block/$p1_major_minor/start") || return 1
+  p2_start_sectors=$(<"/sys/dev/block/$p2_major_minor/start") || return 1
+  [[ "$p1_start_sectors" =~ ^[0-9]+$ && "$p2_start_sectors" =~ ^[0-9]+$ ]] || return 1
+  p1_start_bytes=$((p1_start_sectors * 512))
+  p2_start_bytes=$((p2_start_sectors * 512))
+  p1_size_bytes=$(blockdev --getsize64 "$p1_real" 2>/dev/null || true)
+  p2_size_bytes=$(blockdev --getsize64 "$p2_real" 2>/dev/null || true)
+  p1_partition_type=$(lsblk -dnro PARTTYPE "$p1_real" 2>/dev/null || true)
+  p2_partition_type=$(lsblk -dnro PARTTYPE "$p2_real" 2>/dev/null || true)
+  post_diskseq=$(blockdev --getdiskseq "$TARGET_DISK" 2>/dev/null || true)
+  [ "$post_diskseq" = "$TARGET_DISKSEQ" ] || return 1
+  securityops_valid_partition_geometry \
+    "$TARGET_SIZE" "$p1_start_bytes" "$p1_size_bytes" "$p1_partition_type" \
+    "$p2_start_bytes" "$p2_size_bytes" "$p2_partition_type" || return 1
+  log "validated GPT: $p1_real start=$p1_start_bytes size=$p1_size_bytes type=$p1_partition_type; $p2_real start=$p2_start_bytes size=$p2_size_bytes type=$p2_partition_type"
+}
+
+target_identity_matches_snapshot(){
+  local current_disk current_type current_major_minor current_sysfs current_size
+  local current_diskseq current_wwn current_serial
+  current_disk=$(readlink -f -- "$TARGET_DISK" 2>/dev/null || true)
+  current_type=$(lsblk -dnro TYPE "$current_disk" 2>/dev/null || true)
+  current_major_minor=$(lsblk -dnro MAJ:MIN "$current_disk" 2>/dev/null || true)
+  current_sysfs=$(readlink -f -- "/sys/dev/block/$current_major_minor" 2>/dev/null || true)
+  current_size=$(blockdev --getsize64 "$current_disk" 2>/dev/null || true)
+  current_diskseq=$(blockdev --getdiskseq "$current_disk" 2>/dev/null || true)
+  current_wwn=$(lsblk -dnro WWN "$current_disk" 2>/dev/null | tr -d '[:space:]')
+  current_serial=$(lsblk -dnro SERIAL "$current_disk" 2>/dev/null | tr -d '[:space:]')
+  [ -b "$current_disk" ] && \
+    securityops_same_disk_identity \
+      "$TARGET_DISK" "$TARGET_MAJMIN" "$TARGET_SYSFS" "$TARGET_SIZE" \
+      "$TARGET_DISKSEQ" "$TARGET_WWN" "$TARGET_SERIAL" \
+      "$current_disk" "$current_type" "$current_major_minor" \
+      "$current_sysfs" "$current_size" "$current_diskseq" \
+      "$current_wwn" "$current_serial"
+}
+
+require_target_identity(){
+  local phase="$1"
+  target_identity_matches_snapshot || \
+    die "Target device identity changed before $phase. Refusing the next destructive open."
+}
+
+require_target_unclaimed_identity(){
+  local phase=$1 busy_reason
+  require_target_identity "$phase"
+  busy_reason=$(device_tree_busy_reason "$TARGET_DISK")
+  [ -z "$busy_reason" ] || \
+    die "Target use changed before $phase: $busy_reason. Refusing the next destructive open."
+}
+
+# ---------------------------------------------------------------------------
+# 0. Welcome
+# ---------------------------------------------------------------------------
+whiptail --title "$TITLE" --msgbox "$BANNER\n\nWelcome to the Security Ops OS guided installer.\n\nThis installs Security Ops OS, a hardened GNU/Linux distribution managed declaratively with GNU Guix.\nNothing is written until you confirm the target device by name." 22 74
+
+# The generated config uses grub-efi + a vfat ESP, so it only boots on UEFI.
+# Refuse legacy-BIOS boots up front rather than producing an unbootable install.
+[ -d /sys/firmware/efi ] || die "This machine appears to have booted in legacy
+BIOS mode. The Security Ops installer currently supports UEFI systems only —
+reboot in UEFI mode and try again."
+SECURE_BOOT_STATE=$(secure_boot_state /sys/firmware/efi/efivars)
+case "$SECURE_BOOT_STATE" in
+  enabled)
+    die "UEFI Secure Boot is enabled, but this release does not yet install a
+signed GRUB/kernel chain. Disable Secure Boot before installation; the installer
+will not erase a disk and leave an unbootable system." ;;
+  disabled) ;;
+  unavailable)
+    die "UEFI mode is active, but the SecureBoot variable is unavailable. Because
+this release installs an unsigned boot chain, the installer requires an explicit
+SecureBoot=0 reading before any disk can be erased." ;;
+  *)
+    die "The UEFI Secure Boot variable could not be interpreted safely. Refusing
+to install until boot policy can be determined." ;;
+esac
+
+# ---------------------------------------------------------------------------
+# 1. Keyboard / locale / timezone
+# ---------------------------------------------------------------------------
+KEYMAP=$(menu "Keyboard layout:" \
+  "us"   "US English" \
+  "br"   "Brazilian ABNT2" \
+  "gb"   "United Kingdom" \
+  "de"   "German" \
+  "fr"   "French" \
+  "es"   "Spanish") || exit 1
+[ "$KEYMAP" = "br" ] && XKBVARIANT="abnt2" || XKBVARIANT=""
+apply_live_keyboard_layout "$KEYMAP" "$XKBVARIANT" || \
+  die "The selected keyboard layout could not be applied to this trusted input path. Start the installer from the Sway session or from a real VT; XMonad/KDE users must log out and select Sway first. No password has been requested."
+while :; do
+  KEYBOARD_CHECK=$(input "Non-secret keyboard check: type exactly Yz09-_/\n\nVerify that the visible characters match before creating passwords:" "") || exit 1
+  [ "$KEYBOARD_CHECK" = 'Yz09-_/' ] && break
+  msg "The layout check did not match. Recheck the selected physical layout; no secret was recorded." 10
+done
+unset KEYBOARD_CHECK
+
+LOCALE=$(menu "System locale:" \
+  "en_US.UTF-8" "English (US)" \
+  "pt_BR.UTF-8" "Português (Brasil)" \
+  "en_GB.UTF-8" "English (UK)" \
+  "de_DE.UTF-8" "Deutsch" \
+  "fr_FR.UTF-8" "Français" \
+  "es_ES.UTF-8" "Español") || exit 1
+
+# timezone: region then city
+TZREGION=$(menu "Timezone region:" \
+  "America"   "America" \
+  "Europe"    "Europe" \
+  "Asia"      "Asia" \
+  "Africa"    "Africa" \
+  "Australia" "Australia" \
+  "UTC"       "UTC (no region)") || exit 1
+if [ "$TZREGION" = "UTC" ]; then
+  TIMEZONE="UTC"
+else
+  ZI=/run/current-system/profile/share/zoneinfo
+  # %P prints the path relative to the region dir, so nested zones like
+  # Argentina/Buenos_Aires and Indiana/Indianapolis are reachable too.
+  mapfile -t CITIES < <(find "$ZI/$TZREGION" -type f -printf '%P\n' 2>/dev/null | sort)
+  ARGS=(); for c in "${CITIES[@]}"; do ARGS+=("$c" ""); done
+  CITY=$(menu "Timezone ($TZREGION/…):" "${ARGS[@]}") || exit 1
+  TIMEZONE="$TZREGION/$CITY"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Hostname + accounts
+# ---------------------------------------------------------------------------
+while :; do
+  HOSTNAME=$(input "Hostname:" "securityops") || exit 1
+  securityops_valid_hostname "$HOSTNAME" && break
+  msg "Hostname must be 1-63 chars: letters, digits, hyphen (no leading hyphen)." 9
+done
+while :; do
+  USERNAME=$(input "Your username (lowercase):" "securityops") || exit 1
+  if ! securityops_valid_username "$USERNAME"; then
+    msg "Username must start with a lowercase letter or _, then only a-z 0-9 _ - (max 32)." 9; continue
+  fi
+  # reserved system accounts would collide with the base accounts (and the
+  # generated config already defines its own root) → the install would abort
+  # AFTER the disk is wiped.  Refuse them here.
+  reserved_users=" root nobody daemon bin sys sync mail messagebus sshd guixbuilder nscd avahi colord gdm geoclue ntpd polkitd "
+  if [[ "$reserved_users" == *" $USERNAME "* ]]; then
+    msg "'$USERNAME' is a reserved system account name. Choose another." 9
+    continue
+  fi
+  if [[ "$USERNAME" =~ ^guixbuilder[0-9]+$ ]]; then
+    msg "'$USERNAME' is reserved for a Guix build account. Choose another." 9
+    continue
+  fi
+  break
+done
+while :; do
+  FULLNAME=$(input "Full name (optional):" "$USERNAME") || exit 1
+  securityops_valid_gecos "$FULLNAME" "$TRUSTED_PYTHON" && break
+  msg "Full name must be at most 128 printable characters and cannot contain ':' or control characters." 10
+done
+while :; do
+  UPASS=$(password "Password for '$USERNAME':") || exit 1
+  UPASS2=$(password "Confirm password for '$USERNAME':") || exit 1
+  if [ "$UPASS" != "$UPASS2" ]; then
+    msg "Passwords did not match. Try again." 9
+    continue
+  fi
+  if ! securityops_admin_password_meets_policy "$UPASS" "$USERNAME" "$HOSTNAME"; then
+    msg "Administrative passwords must be 12–128 printable US-ASCII bytes, must differ from the username and hostname, and cannot be a repeated character, common static value, or obvious keyboard/counting sequence. This is a deterministic minimum policy, not a strength score." 13
+    continue
+  fi
+  break
+done
+
+# Hash the administrative password immediately and retain only its verifier in
+# a root-owned volatile file.  It never becomes an argument, environment value,
+# Guix configuration field, derivation input, or log record.  yescrypt is
+# provided by the live profile's source-built mkpasswd/libxcrypt stack.
+ADMIN_HASH_FILE=$(securityops_private_tempfile "$RUNTIME_DIR" admin-hash) || \
+  die "Could not create protected volatile state for the administrative password."
+if ! mkpasswd --method=yescrypt --password-fd=9 9<<<"$UPASS" >"$ADMIN_HASH_FILE"; then
+  die "Could not hash the administrative password."
+fi
+unset UPASS UPASS2
+# Literal yescrypt `$y$' prefix.
+# shellcheck disable=SC2016
+if ! grep -Eq '^\$y\$[^:[:space:]]+\$[^:[:space:]]+\$[^:[:space:]]+$' \
+     "$ADMIN_HASH_FILE"; then
+  die "The administrative password verifier has an unexpected format."
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Desktop / WM
+# ---------------------------------------------------------------------------
+DESKTOP=$(menu "Desktop / window manager:" \
+  "sway" "Sway — Wayland tiling (default, fastest)" \
+  "xmonad-xlibre" "XMonad — tiling on the pinned XLibre server" \
+  "kde"  "KDE Plasma — full Wayland desktop") || exit 1
+
+# ---------------------------------------------------------------------------
+# 4. Disk, encryption, filesystem
+# ---------------------------------------------------------------------------
+# TYPE + SIZE are single tokens; MODEL (last) may contain spaces — so filter on
+# the fixed-position TYPE column and take everything after SIZE as the model.
+mapfile -t DISKS < <(lsblk -dn -o NAME,TYPE,SIZE,MODEL | \
+  awk '$2=="disk" && $1 !~ /^(zram|loop|sr|fd|md|dm-)/ {name=$1; size=$3; $1=$2=$3=""; sub(/^ +/,""); printf "%s\t%s  %s\n", name, size, $0}')
+[ "${#DISKS[@]}" -gt 0 ] || die "No disks detected."
+DARGS=(); for d in "${DISKS[@]}"; do DARGS+=("/dev/$(echo "$d"|cut -f1)" "$(echo "$d"|cut -f2-)"); done
+DISK=$(menu "Target disk (WILL BE ERASED):" "${DARGS[@]}") || exit 1
+[ -b "$DISK" ] || die "$DISK is not a block device."
+# Guard 1: resolve root= from the kernel command line and refuse its physical
+# backing disk.  Fail closed if a non-optical live root cannot be traced: an
+# installer that cannot identify its own medium is not safe to partition disks.
+ROOT_SPEC=$(cmdline_root_spec /proc/cmdline || true)
+[ -n "$ROOT_SPEC" ] || die "Could not identify the live root from /proc/cmdline.
+Refusing to partition any disk because the boot medium cannot be protected."
+mapfile -t LIVE_ROOT_DEVICES < <(resolve_root_devices "$ROOT_SPEC")
+[ "${#LIVE_ROOT_DEVICES[@]}" -gt 0 ] || die "Could not resolve every live-root
+device matching '$ROOT_SPEC'. Refusing to partition any disk."
+LIVE_BACKING_DISKS=()
+for live_root_device in "${LIVE_ROOT_DEVICES[@]}"; do
+  LIVE_ROOT_TYPE=$(lsblk -dnro TYPE "$live_root_device" 2>/dev/null | head -1 || true)
+  if [ "$LIVE_ROOT_TYPE" != rom ]; then
+    mapfile -t candidate_backing_disks < <(backing_disks "$live_root_device")
+    [ "${#candidate_backing_disks[@]}" -gt 0 ] || \
+      die "Could not trace live root '$live_root_device' to all physical backing disks."
+    LIVE_BACKING_DISKS+=("${candidate_backing_disks[@]}")
+  fi
+done
+if [ "${#LIVE_BACKING_DISKS[@]}" -gt 0 ]; then
+  mapfile -t LIVE_BACKING_DISKS < <(printf '%s\n' "${LIVE_BACKING_DISKS[@]}" | sort -u)
+fi
+TARGET_DISK=$(readlink -f -- "$DISK")
+TARGET_TYPE=$(lsblk -dnro TYPE "$TARGET_DISK" 2>/dev/null || true)
+TARGET_MAJMIN=$(lsblk -dnro MAJ:MIN "$TARGET_DISK" 2>/dev/null || true)
+TARGET_SYSFS=$(readlink -f -- "/sys/dev/block/$TARGET_MAJMIN" 2>/dev/null || true)
+TARGET_SIZE=$(blockdev --getsize64 "$TARGET_DISK" 2>/dev/null || true)
+TARGET_DISKSEQ=$(blockdev --getdiskseq "$TARGET_DISK" 2>/dev/null || true)
+TARGET_WWN=$(lsblk -dnro WWN "$TARGET_DISK" 2>/dev/null | tr -d '[:space:]')
+TARGET_SERIAL=$(lsblk -dnro SERIAL "$TARGET_DISK" 2>/dev/null | tr -d '[:space:]')
+MINIMUM_DISK_BYTES=$((64 * 1024 * 1024 * 1024))
+if [ "$TARGET_TYPE" != disk ] || [ -z "$TARGET_MAJMIN" ] || \
+   [ -z "$TARGET_SYSFS" ] || [[ ! "$TARGET_SIZE" =~ ^[0-9]+$ ]] || \
+   [[ ! "$TARGET_DISKSEQ" =~ ^[0-9]+$ ]]; then
+  die "Could not capture a stable identity for $DISK. Refusing to continue."
+fi
+[ "$TARGET_SIZE" -ge "$MINIMUM_DISK_BYTES" ] || \
+  die "$DISK is smaller than the supported 64 GiB installation minimum."
+log "live root $ROOT_SPEC -> ${LIVE_ROOT_DEVICES[*]} -> ${LIVE_BACKING_DISKS[*]:-optical}; target $TARGET_DISK ($TARGET_MAJMIN seq=$TARGET_DISKSEQ $TARGET_SIZE bytes wwn=${TARGET_WWN:-none} serial=${TARGET_SERIAL:-none})"
+for live_disk in "${LIVE_BACKING_DISKS[@]}"; do
+  [ "$live_disk" != "$TARGET_DISK" ] || \
+    die "$DISK backs the live system. Refusing to wipe the live medium."
+done
+# Mounted targets must be unmounted explicitly before installation.  Merely
+# warning and continuing allows wipefs/mkfs to corrupt a filesystem still in use.
+TARGET_BUSY_REASON=$(device_tree_busy_reason "$TARGET_DISK")
+[ -z "$TARGET_BUSY_REASON" ] || \
+  die "$DISK is in use: $TARGET_BUSY_REASON. Deactivate it explicitly, then restart the installer."
+
+if yesno "Encrypt the root volume with LUKS2?\n\n(Strongly recommended. The UEFI system partition remains unencrypted. You'll set a passphrase now.)"; then
+  ENCRYPT=yes
+  if [ "$KEYMAP" != us ]; then
+    msg "The pinned GRUB 2.14 cryptomount prompt appears before the installed keyboard map is loaded. LUKS entry therefore uses the US layout. The installer will temporarily switch this trusted input path to US for passphrase creation; the installed desktop will still use '$KEYMAP'." 13
+    apply_live_keyboard_layout us "" || \
+      die "Could not apply the mandatory US layout for early-boot LUKS input. No passphrase was requested."
+    while :; do
+      KEYBOARD_CHECK=$(input "Non-secret LUKS keyboard check (US layout): type exactly Yz09-_/\n\nThe first cold-boot unlock prompt will use this mapping:" "") || exit 1
+      [ "$KEYBOARD_CHECK" = 'Yz09-_/' ] && break
+      msg "The US-layout LUKS check did not match. No secret was recorded." 10
+    done
+    unset KEYBOARD_CHECK
+  fi
+  while :; do
+    LPASS=$(password "LUKS passphrase for $DISK:") || exit 1
+    LPASS2=$(password "Confirm LUKS passphrase:") || exit 1
+    if [ "$LPASS" != "$LPASS2" ]; then
+      msg "Passphrases did not match. Try again." 9
+      continue
+    fi
+    if ! securityops_luks_passphrase_meets_policy "$LPASS" "$USERNAME" "$HOSTNAME"; then
+      msg "LUKS passphrases must be 20–254 printable US-ASCII bytes, must differ from the username and hostname, and cannot be a repeated character, common static value, or obvious keyboard/counting sequence. The 254-byte ceiling matches the pinned GRUB 2.14 input buffer." 14
+      continue
+    fi
+    break
+  done
+  if [ "$KEYMAP" != us ]; then
+    apply_live_keyboard_layout "$KEYMAP" "$XKBVARIANT" || \
+      die "The selected desktop keyboard layout could not be restored after protected LUKS entry."
+  fi
+else
+  ENCRYPT=no
+fi
+
+while :; do
+  FS=$(menu "Root filesystem:" \
+    "ext4"  "ext4 — stable, universal (recommended)" \
+    "btrfs" "Btrfs — snapshots, compression" \
+    "xfs"   "XFS — high-throughput" \
+    "zfs"   "ZFS — planned (not selectable yet)") || exit 1
+  # Root-on-ZFS needs an out-of-tree module the Security Ops kernel does not
+  # carry (and a pool-import service).  Rather than wipe the disk and fail at
+  # `guix system init', refuse ZFS up front and let the user pick again.
+  if [ "$FS" = "zfs" ]; then
+    msg "ZFS root is not yet bootable on the Security Ops kernel (no in-tree ZFS\nmodule). Please choose ext4, Btrfs, or XFS for now." 11
+    continue
+  fi
+  break
+done
+
+# ---------------------------------------------------------------------------
+# 5. Summary + typed confirmation
+# ---------------------------------------------------------------------------
+SUMMARY="Please review — this will ERASE $DISK:
+
+  Disk        : $DISK
+  Encryption  : $([ "$ENCRYPT" = yes ] && echo 'LUKS2 (yes)' || echo 'none')
+  Filesystem  : $FS
+  Desktop     : $DESKTOP
+  Hostname    : $HOSTNAME
+  User        : $USERNAME
+  Locale      : $LOCALE
+  Timezone    : $TIMEZONE
+  Keyboard    : $KEYMAP $XKBVARIANT
+  LUKS input  : $([ "$ENCRYPT" = yes ] && echo 'US layout at first GRUB prompt' || echo 'not applicable')
+  Kernel      : linux-securityops $KERNEL_VERSION (hardened)"
+# Show the full review in a TALL msgbox (an inputbox would clip the last lines),
+# then ask for the typed confirmation in its own short box.
+whiptail --title "$TITLE — review" --scrolltext --msgbox "$SUMMARY" 20 76
+CONFIRM=$(input "This ERASES $DISK. To proceed, type the target device path EXACTLY:" "") || exit 1
+[ "$CONFIRM" = "$DISK" ] || die "Confirmation did not match ($CONFIRM ≠ $DISK). Aborted — nothing changed."
+
+# ===========================================================================
+# EXECUTION — from here on the disk is modified.
+# ===========================================================================
+# Refuse resource collisions before claiming ownership of any teardown action.
+# A stale/foreign /mnt or cryptroot must never be unmounted or closed by this
+# installer.  The Guix store overlay is created later in a private mount
+# namespace, so no global cow-store Shepherd service can collide.
+if findmnt -rn -M /mnt >/dev/null 2>&1; then
+  die "/mnt is already mounted. Refusing to disturb unrelated state."
+fi
+if [ -L /mnt ] || { [ -e /mnt ] && [ ! -d /mnt ]; }; then
+  die "/mnt exists but is not a safe directory. Refusing to continue."
+fi
+if [ -d /mnt ] && find /mnt -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+  die "/mnt is not empty. Refusing to hide or overwrite unrelated state."
+fi
+if [ -e /dev/mapper/cryptroot ] || [ -L /dev/mapper/cryptroot ] || \
+   cryptsetup status cryptroot >/dev/null 2>&1; then
+  die "A cryptroot mapping already exists. Refusing to close or replace it."
+fi
+
+# Whole-disk device names ending in a digit use a `pN' partition suffix
+# (nvme0n1p1, mmcblk0p1, nbd0p1, pmem0p1, ...).  Compute this before any write.
+case "$TARGET_DISK" in
+  *[0-9]) P1="${TARGET_DISK}p1"; P2="${TARGET_DISK}p2" ;;
+  *) P1="${TARGET_DISK}1"; P2="${TARGET_DISK}2" ;;
+esac
+
+# Close the selection-to-wipe hotplug window: the canonical node, device type,
+# kernel major/minor identity, sysfs object, size, mount state, and every current
+# live-root backing disk must still match immediately before wipefs.
+require_target_identity "the final pre-wipe gate"
+CURRENT_TARGET_BUSY_REASON=$(device_tree_busy_reason "$TARGET_DISK")
+[ -z "$CURRENT_TARGET_BUSY_REASON" ] || \
+  die "Target use changed after confirmation: $CURRENT_TARGET_BUSY_REASON. Refusing to wipe it."
+CURRENT_ROOT_SPEC=$(cmdline_root_spec /proc/cmdline || true)
+[ "$CURRENT_ROOT_SPEC" = "$ROOT_SPEC" ] || \
+  die "The live-root specification changed before the wipe."
+mapfile -t CURRENT_LIVE_ROOT_DEVICES < <(resolve_root_devices "$CURRENT_ROOT_SPEC")
+[ "${#CURRENT_LIVE_ROOT_DEVICES[@]}" -gt 0 ] || \
+  die "Could not revalidate every live-root match immediately before the wipe."
+[ "${CURRENT_LIVE_ROOT_DEVICES[*]}" = "${LIVE_ROOT_DEVICES[*]}" ] || \
+  die "The set of live-root devices changed before the wipe."
+CURRENT_LIVE_BACKING_DISKS=()
+for current_live_root_device in "${CURRENT_LIVE_ROOT_DEVICES[@]}"; do
+  CURRENT_LIVE_ROOT_TYPE=$(lsblk -dnro TYPE "$current_live_root_device" 2>/dev/null | head -1 || true)
+  if [ "$CURRENT_LIVE_ROOT_TYPE" != rom ]; then
+    mapfile -t candidate_backing_disks < <(backing_disks "$current_live_root_device")
+    [ "${#candidate_backing_disks[@]}" -gt 0 ] || \
+      die "Could not revalidate a live-root backing disk before the wipe."
+    CURRENT_LIVE_BACKING_DISKS+=("${candidate_backing_disks[@]}")
+  fi
+done
+if [ "${#CURRENT_LIVE_BACKING_DISKS[@]}" -gt 0 ]; then
+  mapfile -t CURRENT_LIVE_BACKING_DISKS < <(printf '%s\n' "${CURRENT_LIVE_BACKING_DISKS[@]}" | sort -u)
+fi
+[ "${CURRENT_LIVE_BACKING_DISKS[*]}" = "${LIVE_BACKING_DISKS[*]}" ] || \
+  die "The live-root backing topology changed before the wipe."
+for live_disk in "${CURRENT_LIVE_BACKING_DISKS[@]}"; do
+  [ "$live_disk" != "$TARGET_DISK" ] || \
+    die "The confirmed target now backs the live system. Refusing to wipe it."
+done
+
+WIPED=1                        # the on_err trap now cleans up + tells the truth
+{
+# --- partition: GPT, 512M ESP + rest for root ------------------------------
+log "wiping + partitioning $DISK"
+require_target_unclaimed_identity "wipefs"
+wipefs -a "$TARGET_DISK"
+require_target_unclaimed_identity "GPT label creation"
+parted -s "$TARGET_DISK" mklabel gpt
+require_target_unclaimed_identity "ESP creation"
+parted -s "$TARGET_DISK" mkpart ESP fat32 1MiB 513MiB
+require_target_unclaimed_identity "ESP type update"
+parted -s "$TARGET_DISK" set 1 esp on
+require_target_unclaimed_identity "root partition creation"
+parted -s "$TARGET_DISK" mkpart securityops-root 513MiB 100%
+require_target_unclaimed_identity "partition-table reread"
+blockdev --rereadpt "$TARGET_DISK"
+require_target_unclaimed_identity "partition probe"
+partprobe "$TARGET_DISK"
+
+# Wait for the kernel to create the partition device nodes (settle) instead of a
+# blind sleep — a hardcoded delay races mkfs on slow/loaded systems.
+udevadm settle --timeout=15
+for _ in $(seq 1 75); do { [ -b "$P1" ] && [ -b "$P2" ]; } && break; sleep 0.2; done
+{ [ -b "$P1" ] && [ -b "$P2" ]; } || die "Partition nodes $P1/$P2 never appeared."
+validate_created_partition_layout || \
+  die "The kernel partition view does not match the new Security Ops GPT layout. Refusing to format possibly stale device nodes."
+
+require_target_unclaimed_identity "ESP formatting"
+validate_created_partition_layout || die "Partition identity changed before ESP formatting."
+mkfs.fat -F32 -n EFI "$P1"
+
+# --- optional LUKS ---------------------------------------------------------
+if [ "$ENCRYPT" = yes ]; then
+  log "luksFormat $P2"
+  require_target_unclaimed_identity "LUKS formatting"
+  validate_created_partition_layout || die "Partition identity changed before LUKS formatting."
+  # The exact pinned GRUB EFI 2.14 build includes luks2.mod + argon2.mod.  Its
+  # OVMF pre-boot harness opened this bounded Argon2id profile successfully.
+  # Pin every cost rather than accepting a host-speed benchmark result; the
+  # complete installed-image cold boot remains a mandatory release gate.
+  printf '%s' "$LPASS" | cryptsetup luksFormat \
+    --type luks2 --cipher aes-xts-plain64 --key-size 512 \
+    --pbkdf argon2id --pbkdf-memory 65536 --pbkdf-parallel 1 \
+    --pbkdf-force-iterations 4 \
+    --batch-mode --key-file=- "$P2"
+  if ! cryptsetup luksDump --dump-json-metadata "$P2" | \
+       "$TRUSTED_PYTHON" -I -S -c '
+import json, sys
+metadata = json.load(sys.stdin)
+slots = metadata.get("keyslots", {})
+if len(slots) != 1:
+    raise SystemExit(2)
+kdf = next(iter(slots.values())).get("kdf", {})
+expected = {"type": "argon2id", "time": 4, "memory": 65536, "cpus": 1}
+if any(kdf.get(name) != value for name, value in expected.items()):
+    raise SystemExit(3)
+'; then
+    die "The LUKS2 keyslot does not match the tested pinned-GRUB Argon2id parameters."
+  fi
+  LUKS_UUID=$(cryptsetup luksUUID "$P2" 2>/dev/null || true)
+  [ -n "$LUKS_UUID" ] || die "Could not read the LUKS container UUID from $P2."
+  EXPECTED_CRYPT_SOURCE=$(readlink -f -- "$P2" 2>/dev/null || true)
+  [ -n "$EXPECTED_CRYPT_SOURCE" ] || die "Could not bind cryptroot to its source partition."
+  require_target_unclaimed_identity "LUKS mapping"
+  validate_created_partition_layout || die "Partition identity changed before LUKS mapping."
+  CRYPTROOT_OPEN_ATTEMPTED=1
+  printf '%s' "$LPASS" | cryptsetup open --key-file=- "$P2" cryptroot
+  CRYPTROOT_OPENED=1
+  unset LPASS LPASS2
+  ROOTDEV=/dev/mapper/cryptroot
+else
+  ROOTDEV="$P2"
+fi
+
+# --- make the chosen filesystem -------------------------------------------
+log "mkfs $FS on $ROOTDEV"
+if [ "$ENCRYPT" = yes ]; then
+  require_target_identity "root filesystem formatting"
+else
+  require_target_unclaimed_identity "root filesystem formatting"
+fi
+validate_created_partition_layout || die "Partition identity changed before root filesystem formatting."
+case "$FS" in
+  ext4)  mkfs.ext4  -F -L securityops "$ROOTDEV";;
+  btrfs) mkfs.btrfs -f -L securityops "$ROOTDEV";;
+  xfs)   mkfs.xfs   -f -L securityops "$ROOTDEV";;
+  zfs)   zpool create -f -o ashift=12 -O mountpoint=none -O compression=zstd \
+             -O acltype=posixacl -O xattr=sa securityops "$ROOTDEV"
+         zfs create -o mountpoint=/ securityops/root;;
+esac
+
+# --- mount target ----------------------------------------------------------
+EXPECTED_ROOTDEV_MAJMIN=$(lsblk -dnro MAJ:MIN "$ROOTDEV" 2>/dev/null || true)
+[[ "$EXPECTED_ROOTDEV_MAJMIN" =~ ^[0-9]+:[0-9]+$ ]] || \
+  die "Could not bind the target mount to its formatted device."
+require_target_identity "target mount"
+validate_created_partition_layout || die "Partition identity changed before target mount."
+TARGET_MOUNT_ATTEMPTED=1
+if [ "$FS" = zfs ]; then
+  zpool export securityops; zpool import -R /mnt securityops; zfs mount securityops/root
+else
+  mount "$ROOTDEV" /mnt
+fi
+TARGET_MOUNTED=1
+mkdir -p /mnt/boot/efi /mnt/etc
+require_target_identity "ESP mount"
+validate_created_partition_layout || die "Partition identity changed before ESP mount."
+mount "$P1" /mnt/boot/efi
+
+# Read the UUIDs the generated config keys on, WITH validation + a settle retry —
+# an empty root UUID would otherwise fail `guix system init' AFTER the wipe.
+EFI_UUID=$(blkid -s UUID -o value "$P1" 2>/dev/null || true)
+[ -n "$EFI_UUID" ] || die "Could not read the ESP UUID from $P1."
+ROOT_UUID=""
+if [ "$ENCRYPT" != yes ] && [ "$FS" != zfs ]; then
+  for _ in $(seq 1 25); do
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOTDEV" 2>/dev/null || true)
+    [ -n "$ROOT_UUID" ] && break; sleep 0.2
+  done
+  [ -n "$ROOT_UUID" ] || die "Could not read the new root filesystem UUID from $ROOTDEV."
+fi
+} 2>>"$LOG"
+
+# ---------------------------------------------------------------------------
+# 6. Generate /mnt/etc/config.scm from the choices
+# ---------------------------------------------------------------------------
+log "generating config.scm ($DESKTOP / $FS / encrypt=$ENCRYPT)"
+# Both root and the administrative user stay declaratively locked.  The
+# protected verifier is applied directly to the target shadow database only
+# after `guix system init' succeeds, so it never enters the Guix store.
+"$CONFIG_GENERATOR" \
+  --out /mnt/etc/config.scm \
+  --host "$HOSTNAME" --user "$USERNAME" --fullname "$FULLNAME" \
+  --locale "$LOCALE" --tz "$TIMEZONE" --keymap "$KEYMAP" --xkbvariant "$XKBVARIANT" \
+  --desktop "$DESKTOP" --fs "$FS" --encrypt "$ENCRYPT" \
+  --root-uuid "$ROOT_UUID" --efi-uuid "$EFI_UUID" \
+  --luks-uuid "${LUKS_UUID:-}" 2>>"$LOG"
+
+# Copy the (securityops …) module tree to the TARGET so the installed system can
+# use its pinned time-machine for every future reconfigure.  `guix system init'
+# does not carry these source modules across on its own.
+log "copying securityops src to target"
+mkdir -p /mnt/etc/securityops
+cp -a -- "$SRC" /mnt/etc/securityops/src 2>>"$LOG" || \
+  die "Could not copy the authenticated Security Ops modules to the target. The disk is partially prepared, but no unsupported manual-finish path is offered."
+
+# ---------------------------------------------------------------------------
+# 7. Install
+# ---------------------------------------------------------------------------
+# Build & install inside a dedicated mount namespace.  The helper temporarily
+# stops the host Guix daemon, snapshots its database, mounts the target-backed
+# store overlay only in that namespace, runs the exact authenticated
+# time-machine command, then restores the database/daemon and unmounts through
+# dynamic-wind.  No global cow-store mount survives the command.
+log "pinned guix time-machine: system init"
+clear
+cat <<BANNER
+  ────────────────────────────────────────────────────────────────
+   Security Ops OS — installing to $DISK
+   $FS · $([ "$ENCRYPT" = yes ] && echo 'LUKS2 encrypted' || echo 'no encryption') · $DESKTOP desktop · kernel $KERNEL_VERSION
+   This downloads/builds the full system; it can take a while.
+   Full log: $LOG
+  ────────────────────────────────────────────────────────────────
+BANNER
+GUIX_DB_BACKUP_FILE=$(securityops_private_tempfile "$RUNTIME_DIR" guix-db) || \
+  die "Could not create a protected Guix database snapshot path."
+# Run the helper as a direct, monitored child in its own session/process group.
+# Bash traps forward HUP/INT/TERM/QUIT and do not release target/private state
+# until this exact child and every member of its group have terminated.
+COW_HELPER_ACTIVE=1
+COW_HELPER_LAUNCH_IN_PROGRESS=1
+COW_HELPER_PID=""
+COW_HELPER_PGID=""
+GUILE_EXTENSIONS_PATH="$TRUSTED_GUILE_EXTENSIONS" \
+"$TRUSTED_SETSID" "$TRUSTED_FLOCK" -n -E 75 --no-fork "$COW_LOCK_FILE" \
+  "$TRUSTED_GUILE" -L "$TRUSTED_GUILE_SITE" -C "$TRUSTED_GUILE_CCACHE" \
+  -s "$COW_INIT_HELPER" /mnt /mnt/etc/config.scm "$PINNED_CHANNELS" "$SRC" \
+  "$SUBSTITUTE_URLS" "$GUIX_DB_BACKUP_FILE" "$TRUSTED_CERT_FILE" \
+  "$TRUSTED_CERT_DIR" "$PRIVILEGED_STATE_ROOT" "$$" \
+  "$INSTALLER_START_TIME" "$TRUSTED_FLOCK" "$TRUSTED_GUIX" >>"$LOG" 2>&1 &
+COW_HELPER_PID=$!
+[[ "$COW_HELPER_PID" =~ ^[1-9][0-9]*$ ]] || {
+  COW_HELPER_LAUNCH_IN_PROGRESS=0
+  die "Mount-namespace helper launch did not return a valid child PID. Target and private state remain guarded."
+}
+helper_identity_ok=0
+for _ in $(seq 1 100); do
+  if [ -r "/proc/$COW_HELPER_PID/stat" ]; then
+    IFS= read -r helper_status <"/proc/$COW_HELPER_PID/stat" || true
+    helper_status=${helper_status##*) }
+    read -r _ helper_ppid helper_pgid _ <<<"$helper_status"
+    if [ "$helper_ppid" = "$$" ] && [ "$helper_pgid" = "$COW_HELPER_PID" ]; then
+      COW_HELPER_PGID=$helper_pgid
+      helper_identity_ok=1
+      break
+    fi
+  fi
+  cow_helper_pid_running || break
+  sleep 0.05
+done
+unset helper_status helper_ppid helper_pgid
+if [ "$helper_identity_ok" != 1 ]; then
+  COW_HELPER_LAUNCH_IN_PROGRESS=0
+  if ! terminate_owned_cow_helper TERM; then
+    die "Mount-namespace helper identity was ambiguous and its authenticated lifecycle could not be recovered. Target and private state remain guarded; reboot before retrying."
+  fi
+  die "Mount-namespace helper did not establish its required owned process group."
+fi
+unset helper_identity_ok
+COW_HELPER_LAUNCH_IN_PROGRESS=0
+if [ -n "$COW_PENDING_SIGNAL_STATUS" ]; then
+  pending_signal_status=$COW_PENDING_SIGNAL_STATUS
+  pending_signal_name=$COW_PENDING_SIGNAL_NAME
+  COW_PENDING_SIGNAL_STATUS=""
+  COW_PENDING_SIGNAL_NAME=""
+  on_signal "$pending_signal_status" "$pending_signal_name"
+fi
+rc=0
+wait_owned_cow_helper || rc=$?
+if [ "$rc" -eq 0 ]; then
+  [ ! -e "$GUIX_DB_BACKUP_FILE" ] || \
+    die "Mount-namespace init returned success but left its Guix database snapshot behind."
+  GUIX_DB_BACKUP_FILE=""
+else
+  log "mount-namespace system init failed; protected database snapshot retained at $GUIX_DB_BACKUP_FILE"
+fi
+
+# grub.cfg is written at the very END of `guix system init' (bootloader install
+# is the last step), so its presence + rc==0 is a trustworthy success signal —
+# unlike /mnt/gnu/store, which appears early and would false-positive.
+if [ "$rc" -eq 0 ] && [ -e /mnt/boot/grub/grub.cfg ]; then
+  # Guix deliberately preserves an existing shadow entry on later
+  # reconfigurations.  Activate only the validated administrative account now,
+  # after its locked declaration has built successfully.  chpasswd receives the
+  # username/verifier pair on stdin inside the target root; neither value is an
+  # argument, environment entry, or log payload.
+  for account_file in /mnt/etc/passwd /mnt/etc/shadow; do
+    if [ ! -f "$account_file" ] || [ -L "$account_file" ]; then
+      die "Installed account database is missing or unsafe: $account_file"
+    fi
+  done
+  securityops_private_directory "$RUNTIME_DIR" || \
+    die "Protected installer state became unsafe before account activation."
+  # Literal yescrypt `$y$' prefix.
+  # shellcheck disable=SC2016
+  if [ ! -f "$ADMIN_HASH_FILE" ] || [ -L "$ADMIN_HASH_FILE" ] || \
+     [ "$(stat -c '%u:%g:%a' -- "$ADMIN_HASH_FILE")" != "0:0:600" ] || \
+     ! grep -Eq '^\$y\$[^:[:space:]]+\$[^:[:space:]]+\$[^:[:space:]]+$' \
+       "$ADMIN_HASH_FILE"; then
+    die "Protected administrative password state became invalid."
+  fi
+  if ! awk -v user="$USERNAME" '
+      NR == 1 { print user ":" $0 }
+      END { if (NR != 1) exit 1 }
+    ' "$ADMIN_HASH_FILE" | \
+    chpasswd --encrypted --root /mnt >>"$LOG" 2>&1; then
+    die "The system was built, but the administrative password could not be activated."
+  fi
+  if ! awk -F: -v user="$USERNAME" '
+      $1 == user { print $2; matches++ }
+      END { if (matches != 1) exit 1 }
+    ' /mnt/etc/shadow | cmp -s - "$ADMIN_HASH_FILE"; then
+    die "The installed administrative password verifier did not match protected state."
+  fi
+  # Both declarative accounts remain locked until this target-shadow update is
+  # durable.  Force the exact shadow file and its target filesystem to stable
+  # storage before deleting the only protected verifier or announcing success.
+  "$TRUSTED_SYNC" -f /mnt/etc/shadow >>"$LOG" 2>&1 || \
+    die "The administrative password was applied but could not be made durable. The protected verifier was retained."
+  "$TRUSTED_SYNC" -f /mnt >>"$LOG" 2>&1 || \
+    die "The installed root filesystem could not be synchronized after account activation. The protected verifier was retained."
+  # The ESP is a separate vfat filesystem.  Re-bind it to the installer-owned
+  # partition immediately before syncfs so a replaced mount cannot receive the
+  # durability operation intended for the boot chain.
+  require_target_identity "final ESP durability sync"
+  validate_created_partition_layout || \
+    die "Partition identity changed before final ESP durability sync. The protected verifier was retained."
+  if [ ! -d /mnt/boot/efi ] || [ -L /mnt/boot/efi ]; then
+    die "The installed EFI mount point became unsafe. The protected verifier was retained."
+  fi
+  expected_esp_major_minor=$(lsblk -dnro MAJ:MIN "$P1" 2>/dev/null || true)
+  mounted_esp_major_minor=$(findmnt -nro MAJ:MIN -M /mnt/boot/efi 2>/dev/null || true)
+  if [[ ! "$expected_esp_major_minor" =~ ^[0-9]+:[0-9]+$ ]] || \
+     [ "$mounted_esp_major_minor" != "$expected_esp_major_minor" ]; then
+    die "The installed EFI filesystem no longer matches the installer-owned ESP. The protected verifier was retained."
+  fi
+  "$TRUSTED_SYNC" -f /mnt/boot/efi >>"$LOG" 2>&1 || \
+    die "The installed EFI filesystem could not be synchronized. The protected verifier was retained."
+  unset expected_esp_major_minor mounted_esp_major_minor
+  rm -f -- "$ADMIN_HASH_FILE"
+  ADMIN_HASH_FILE=""
+  "$TRUSTED_SYNC" >>"$LOG" 2>&1 || \
+    die "The installed filesystems could not complete their final synchronization."
+  cleanup_target_state || \
+    die "Installation finished, but installer-owned mounts or encryption mappings could not be released. Do not reboot until the private log is reviewed."
+  REBOOT_NOW=no
+  if whiptail --title "$TITLE" --yesno \
+      "Security Ops OS is synchronized and installer-owned target state is closed.\n\nReboot now? Keep the installation medium attached until reboot begins, then remove it to avoid returning to the live environment." 14 76; then
+    REBOOT_NOW=yes
+  fi
+  if [ "$REBOOT_NOW" = yes ]; then
+    reboot
+  else
+    msg "Installation is complete. Installer-owned mounts and mappings are closed; remove the installation medium before rebooting." 11
+  fi
+else
+  die "guix system init failed (exit $rc). The disk was partitioned but the
+system was NOT fully installed. Inspect $LOG before retrying."
+fi

@@ -1,0 +1,34 @@
+# Build outputs (multi-GB ISOs — NEVER commit)
+/out/
+*.iso
+*.iso.sha256
+
+# CodeMark operation lock
+.codemark/lock
+
+# Private evaluator receipts and temporary state, never image inputs.
+/.dsh/
+
+# Editor / scratch
+.aider*
+.codex*
+continue
+__pycache__/
+*.py[cod]
+*~
+\#*\#
+.DS_Store
+
+# Secrets must never be committed
+*.token
+*_token
+id_*
+*.pem
+*.key
+!securityops/securityops.defconfig
+
+# Local-only agent instructions and prompts
+*[Pp][Rr][Oo][Mm][Pp][Tt]*
+AGENTS.md
+CLAUDE.md
+.claude/
